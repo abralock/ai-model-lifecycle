@@ -139,13 +139,17 @@ Blocking inputs required before code:
 ## 7. Gate 1 test cases (summary)
 
 > Full case table lives in `TEST_CASES.md` (next to this file). Scored on Time/Quality/Cost, normalized against baseline.
+> **CONFIRMED decisions:** C1–C3 kept in Gate 1 · R3→R4→R5 modeled as a **chained pipeline** (model carries its own outputs forward).
 
 | Scenario | Cases |
 |---|---|
-| Refactor | R1 Spring Boot 2→3, R2 GWT→Angular, R3 Oracle→ANSI-SQL |
-| New Development | N1 ETL Recon, N2 ETL Transform |
+| Refactor + Data (chained) | R1 Spring Boot 2→3, R2 GWT→Angular, R3 Oracle SP→PostgreSQL, R4 Schema+Bulk-Load+Optimize, R5 ETL→Dashboard |
 | Code Comprehension / Bug Fix | C1 Cache-invalidation, C2 Long-context retrieval, C3 Multi-file edit |
 | Instruction / Tool Use | T1 Structured output, T2 Tool-call/async, T3 Refusal boundary |
+
+**Dependency chain:** R3 → R4 → R5 (each downstream task consumes the model's *own* upstream output, not golden fixtures).
+
+**Exit criteria addendum:** (3) Continuity chain R3→R4→R5 completes — no downstream break.
 
 **Scoring:**
 ```

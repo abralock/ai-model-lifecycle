@@ -1,0 +1,36 @@
+# AI Model Lifecycle — Gate 1 dev box database services
+#
+# Postgres is used by the R3/R4/R5 chained pipeline cases
+# (Oracle SP -> PostgreSQL, bulk-load/optimize, ETL -> dashboard).
+#
+# Usage (from repo root):
+#   docker compose -f docker/docker-compose.yml up -d
+#   docker compose -f docker/docker-compose.yml ps
+#
+# Credentials default to the dev-box values and can be overridden via a .env
+# placed next to this file (compose auto-loads docker/.env). The repo-root
+# .env holds the harness-side connection vars for the Python runner.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: aidb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aidb
+      POSTGRES_USER: ai
+      POSTGRES_PASSWORD: ai
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai -d aidb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - aidb_pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  aidb_pgdata:

@@ -1,0 +1,52 @@
+# models.yaml — Candidate model matrix for Gate 1 New Model Evaluation.
+#
+# Pair-agnostic structure: add more entries under `pairs:` and the harness,
+# scorers and report pick them up with no code changes.
+#
+# `current` = incumbent model (baseline). `target` = candidate model (upgrade).
+# Every pair has a stable `id` used as the runs/ subdirectory name.
+#
+# Gate 1 pilot ships with ONE pair (Opus 4.8 -> Opus 5.5). The remaining six
+# pairs from GATE1_BUILD_PLAN.md §1 are listed commented-out so they can be
+# enabled without touching Python.
+
+pairs:
+  - id: opus-4.8-vs-5.5
+    current: {id: anthropic/claude-opus-4.8, name: "Claude Opus 4.8"}
+    target:  {id: anthropic/claude-opus-5.5, name: "Claude Opus 5.5"}
+
+# --- Remaining matrix (enable in later waves) -------------------------------
+#  - id: sonnet-5-vs-5.5
+#    current: {id: anthropic/claude-sonnet-5,   name: "Claude Sonnet 5"}
+#    target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}
+#  - id: sonnet-4.6-vs-5.5
+#    current: {id: anthropic/claude-sonnet-4.6, name: "Claude Sonnet 4.6"}
+#    target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}
+#  - id: haiku-4.5-vs-5.5
+#    current: {id: anthropic/claude-haiku-4.5,  name: "Claude Haiku 4.5"}
+#    target:  {id: anthropic/claude-haiku-5.5,  name: "Claude Haiku 5.5"}
+#  - id: gpt-5.6-sol-vs-6-sol
+#    current: {id: openai/gpt-5.6-sol,   name: "GPT-5.6 Sol"}
+#    target:  {id: openai/gpt-6-sol,     name: "GPT-6 Sol"}
+#  - id: gpt-5.6-luna-vs-6-luna
+#    current: {id: openai/gpt-5.6-luna,  name: "GPT-5.6 Luna"}
+#    target:  {id: openai/gpt-6-luna,    name: "GPT-6 Luna"}
+#  - id: gpt-5.6-terra-vs-6-terra
+#    current: {id: openai/gpt-5.6-terra, name: "GPT-5.6 Terra"}
+#    target:  {id: openai/gpt-6-terra,   name: "GPT-6 Terra"}
+
+# --- Harness run defaults (shared across all pairs) -------------------------
+defaults:
+  temperature: 0
+  max_tokens: 8192
+  timeout_s: 600
+  max_retries: 5
+  backoff_base_s: 2      # exponential: base * 2**attempt, honoring Retry-After
+
+# Cases enabled for the pilot. Each maps to a directory under cases/.
+# (R2 GWT->Angular and the C/T suites are deferred — see TEST_CASES.md.)
+cases:
+  - r1_springboot2to3
+  - r3_oracle_to_postgres
+  - r4_schema_load_optimize
+  - r5_etl_dashboard

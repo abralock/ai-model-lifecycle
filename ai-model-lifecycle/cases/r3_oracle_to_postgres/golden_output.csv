@@ -1,0 +1,5 @@
+customer_id,customer_name,total_spend,order_count,tier
+4,Umbrella,120.00,1,BRONZE
+2,Globex,550.00,2,SILVER
+1,Acme Corp,1150.00,2,GOLD
+5,Stark Industries,2000.00,1,GOLD

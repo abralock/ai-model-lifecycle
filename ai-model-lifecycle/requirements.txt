@@ -1,0 +1,15 @@
+# ai-model-lifecycle — Gate 1 harness dependencies
+# Python 3.11+ (dev box targets 3.12 via uv; this file is the pip fallback)
+
+# --- model abstraction / provider ---
+litellm>=1.55.0
+python-dotenv>=1.0.0
+
+# --- scoring / reporting ---
+pandas>=2.0.0
+psycopg2-binary>=2.9.9      # Postgres scoring for R3/R4/R5
+jinja2>=3.1.0               # report templating (optional but handy)
+
+# --- config / testing ---
+pyyaml>=6.0
+pytest>=8.0.0               # R1 compile+test scoring driver

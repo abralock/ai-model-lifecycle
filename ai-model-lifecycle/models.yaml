@@ -38,7 +38,7 @@ pairs:
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:
   temperature: 0
-  max_tokens: 8192
+  max_tokens: 32000
   timeout_s: 600
   max_retries: 5
   backoff_base_s: 2      # exponential: base * 2**attempt, honoring Retry-After

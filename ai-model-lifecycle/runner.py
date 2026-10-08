@@ -182,8 +182,8 @@ def call_model(
     max_retries: int,
     backoff_base_s: float,
     dry_run: bool = False,
-) -> tuple[dict[str, Any], int, float, str | None]:
-    """Call one model, returning (usage_dict, attempts, latency_s, error).
+) -> tuple[dict[str, Any], int, float, str, str | None, str | None]:
+    """Call one model, returning (usage, attempts, latency_s, text, finish_reason, error).
 
     Retries on 429 / 5xx / transient errors with exponential backoff. Never
     raises for a provider error — returns an `error` string instead so the run
@@ -193,23 +193,32 @@ def call_model(
              "cache_write_tokens": 0, "total_tokens": 0}
     if dry_run:
         # Build the payload shape without hitting the network.
-        return usage, 0, 0.0, None
+        return usage, 0, 0.0, "", None, None
 
     try:
         import litellm  # lazy import
     except Exception as exc:  # pragma: no cover
-        return usage, 0, 0.0, f"litellm import failed: {exc}"
+        return usage, 0, 0.0, "", None, f"litellm import failed: {exc}"
 
     token = get_openrouter_token()
     if not token:
-        return usage, 0, 0.0, "OPENROUTER_TOKEN not set (check .env)"
+        return usage, 0, 0.0, "", None, "OPENROUTER_TOKEN not set (check .env)"
+
+    # Some frontier models are reasoning-only and accept a fixed temperature
+    # (e.g. Opus 4.8/5.5 only accept temperature=1). Dropping unsupported params
+    # lets litellm fall back to each model's default rather than hard-failing.
+    litellm.drop_params = True
 
     last_err: str | None = None
     for attempt in range(1, max_retries + 1):
         t0 = time.time()
         try:
+            # OpenRouter models must use the `openrouter/` prefix so litellm routes
+            # through OpenRouter (honoring api_key) instead of the native Anthropic
+            # provider path (which ignores api_key and looks for ANTHROPIC_API_KEY).
+            router_slug = model_slug if model_slug.startswith("openrouter/") else f"openrouter/{model_slug}"
             resp = litellm.completion(
-                model=model_slug,
+                model=router_slug,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
@@ -228,8 +237,19 @@ def call_model(
                 "cache_write_tokens": cw,
                 "total_tokens": tot,
             }
-            text = resp.choices[0].message.content or ""
-            return usage, attempt, latency, None if text else "empty completion"
+            msg = resp.choices[0].message
+            text = msg.content or ""
+            # Reasoning models (Opus 4.8/5.5) may return the answer in the
+            # `reasoning` block and leave `content` empty. Prefer content,
+            # fall back to reasoning so we don't grade an empty string.
+            if not text.strip():
+                reasoning = getattr(msg, "reasoning", None)
+                psf = getattr(msg, "model_extra", {}) or {}
+                reasoning = reasoning or psf.get("reasoning") or psf.get("reasoning_content")
+                if reasoning:
+                    text = reasoning if isinstance(reasoning, str) else str(reasoning)
+            finish_reason = getattr(resp.choices[0], "finish_reason", None)
+            return usage, attempt, latency, text, finish_reason, (None if text else f"empty completion (finish_reason={finish_reason})")
 
         except Exception as exc:  # noqa: BLE001 - we intentionally catch all
             last_err = f"{type(exc).__name__}: {exc}"
@@ -248,7 +268,7 @@ def call_model(
             sleep_s = float(retry_after) if retry_after else backoff_base_s * (2 ** (attempt - 1))
             time.sleep(min(sleep_s, 60.0))
 
-    return usage, max_retries, 0.0, last_err
+    return usage, max_retries, 0.0, "", None, last_err
 
 
 # --------------------------------------------------------------------------- #
@@ -264,7 +284,7 @@ def run_case(
     dry_run: bool = False,
 ) -> RunResult:
     prompt = build_prompt(case_id)
-    usage, attempts, latency, err = call_model(
+    usage, attempts, latency, text, finish_reason, err = call_model(
         model.id,
         prompt,
         temperature=cfg.temperature,
@@ -285,6 +305,8 @@ def run_case(
         latency_s=round(latency, 4),
         attempts=attempts,
         prompt=prompt,
+        output_text=text,
+        finish_reason=finish_reason,
         ok=err is None,
         error=err,
         created_at=time.time(),

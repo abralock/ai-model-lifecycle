@@ -61,10 +61,11 @@ def test_r4_vacuum_solution_still_passes():
     """Opus 5.5's R4 output embeds `VACUUM ANALYZE`; before the fix it scored
     FAIL purely because VACUUM cannot run in the scorer's transaction. It must
     now PASS on the merits of its index."""
+    import glob
     import json
 
-    txt = (RUNS / "anthropic__claude-opus-5.5.r4_schema_load_optimize.json").read_text()
-    out = json.loads(txt)["output_text"]
+    f = glob.glob(str(RUNS / "anthropic__claude-opus-5.5.r4_schema_load_optimize.*.json"))[0]
+    out = json.loads(open(f, encoding="utf-8").read())["output_text"]
     assert "VACUUM" in out.upper(), "fixture precondition"
     r = r4_scorer.score(out, model_slug="t/m")
     assert r.passed is True, r.reason

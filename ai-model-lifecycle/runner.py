@@ -330,7 +330,7 @@ def run_pair(
     for case_id in cfg.selected_cases(case):
         for model, role in ((pair.current, "current"), (pair.target, "target")):
             for rep in range(repeats):
-                res = run_case(cfg, pair_id, case_id, model, role, dry_run=dry_run)
+                res = run_case(cfg, pair_id, case_id, model, role, dry_run=dry_run, rep=rep)
                 status = "OK" if res.ok else f"FAIL ({res.error})"
                 tag = f" [rep {rep+1}/{repeats}]" if repeats > 1 else ""
                 print(f"[{pair_id}] {role:7s} {model.name:20s} {case_id:24s} "

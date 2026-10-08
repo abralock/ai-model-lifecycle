@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -122,17 +123,18 @@ def load_config(path: Path | str | None = None) -> Config:
 # --------------------------------------------------------------------------- #
 # run IO                                                                       #
 # --------------------------------------------------------------------------- #
-def run_path(pair_id: str, model_slug: str, case_id: str, rep: int = 0) -> Path:
-    """Canonical path for a per-run JSON: runs/<pair>/<model>.<case>.json.
+def run_path(pair_id: str, model_slug: str, case_id: str, rep: int = 0, run_dt: str | None = None) -> Path:
+    """Canonical path for a per-run JSON.
 
     The model slug contains '/' (e.g. anthropic/claude-opus-4.8); we keep the
     full slug in the filename but flatten '/' -> '__' to stay filesystem-safe.
-    `rep` > 0 distinguishes repeated runs (rep 0 keeps the canonical name).
+    Date-stamped so repeated runs are never overwritten and history is preserved.
     """
     safe_model = model_slug.replace("/", "__")
+    stamp = run_dt or datetime.now(timezone.utc).strftime("%Y%m%d")
     if rep > 0:
-        return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.r{rep}.json"
-    return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.json"
+        return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.{stamp}.r{rep}.json"
+    return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.{stamp}.json"
 
 
 def save_run(record: dict[str, Any], path: Path) -> None:

@@ -28,9 +28,11 @@ MODELS = ("anthropic__claude-opus-4.8", "anthropic__claude-opus-5.5")
 
 
 def load(case: str, model: str) -> str:
+    import glob
     import json
 
-    return json.loads((RUNS / f"{model}.{case}.json").read_text(encoding="utf-8"))["output_text"]
+    f = glob.glob(str(RUNS / f"{model}.{case}.*.json"))[0]
+    return json.loads(open(f, encoding="utf-8").read())["output_text"]
 
 
 def apply_r4_source(model: str, dsn: str = DSN) -> None:

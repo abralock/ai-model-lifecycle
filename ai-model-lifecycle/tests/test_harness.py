@@ -94,9 +94,9 @@ def test_parse_files_and_deletes():
 
 
 def test_run_path_is_filesystem_safe():
-    p = run_path("pair-x", "anthropic/claude-opus-4.8", "r1_springboot2to3")
+    p = run_path("pair-x", "anthropic/claude-opus-4.8", "r1_springboot2to3", run_dt="20261009")
     assert "/" not in p.name
-    assert p.name == "anthropic__claude-opus-4.8.r1_springboot2to3.json"
+    assert p.name == "anthropic__claude-opus-4.8.r1_springboot2to3.20261009.json"
 
 
 # --------------------------------------------------------------------------- #

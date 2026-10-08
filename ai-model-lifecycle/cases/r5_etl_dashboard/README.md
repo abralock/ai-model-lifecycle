@@ -37,8 +37,11 @@ Running it twice must be idempotent.
 | Check | Rule |
 |---|---|
 | etl runs | model ETL executes without error |
-| reconciliation | `source_order_count - loaded_order_count == 0` |
-| idempotent | second run leaves dashboard row counts unchanged |
+| reconciliation | `source_order_count - SUM(order_count) == 0` **and** `SUM(order_count) > 0` (independently recomputed from `orders`) |
+| log row | the model's own `etl_run_log` row records `mismatch == 0` |
 | dataset loads | both dashboard tables non-empty |
+| idempotent | second run leaves dashboard row counts unchanged |
 
-**Score = pass / fail.**
+**Score = pass / fail.** Note the reconciliation rule is only satisfiable when
+each COMPLETED order is attributed to exactly one category (an order's
+controlling category) — see `etl_spec.md` §2 and §5.

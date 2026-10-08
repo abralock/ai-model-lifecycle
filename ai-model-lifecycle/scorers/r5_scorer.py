@@ -94,7 +94,10 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
                 loaded = int(cur.fetchone()[0])
                 res.details["source_order_count"] = src
                 res.details["loaded_order_count"] = loaded
-                res.checks["reconciliation_zero"] = (src - loaded) == 0
+                # mismatch must be zero AND the rollup must carry real orders:
+                # an empty rollup (loaded == 0) reconciles to zero only when the
+                # source is also empty, which would defeat the gate's intent.
+                res.checks["reconciliation_zero"] = (src == loaded) and (loaded > 0)
 
                 # --- model's own etl_run_log row --------------------------- #
                 cur.execute(

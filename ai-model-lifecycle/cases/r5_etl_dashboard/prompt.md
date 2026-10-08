@@ -15,6 +15,8 @@ from the source tables (`orders`, `order_items`, `products`, `customers`).
    `source_order_count = COUNT(*) FROM orders WHERE status='COMPLETED'`,
    `loaded_order_count = SUM(order_count) FROM dash_revenue_by_category`, and
    `mismatch = source_order_count - loaded_order_count`. **`mismatch` must be 0.**
+   Note that an order can span multiple product categories, so `order_count`
+   must be de-duplicated at the order grain — see `etl_spec.md` §2 and §5.
 4. Make the ETL **idempotent**: running it twice must not double-count.
 
 ## Deliverable

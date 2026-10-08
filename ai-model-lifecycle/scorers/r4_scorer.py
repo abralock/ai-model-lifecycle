@@ -10,6 +10,11 @@ Steps:
 The scorer does not require the model to have run Docker — it re-applies the
 model's DDL/DML into the running Postgres.
 
+Maintenance statements (`VACUUM`, `VACUUM ANALYZE`) are stripped before the SQL
+is applied: Postgres forbids them inside a transaction block, and they are not
+part of the deliverable (schema + bulk load + correct index). See
+`strip_maintenance()`.
+
 Robustness: no Postgres / malformed SQL -> structured fail, never a crash.
 
 Usage:
@@ -30,6 +35,47 @@ DEFAULT_ROWS = 100_000
 DEFAULT_THRESHOLD_MS = 1000.0
 
 
+# --------------------------------------------------------------------------- #
+# Maintenance-only statements that Postgres forbids inside a transaction block.
+#
+# VACUUM (with or without ANALYZE) cannot run inside a transaction block, and
+# psycopg2 runs every statement on a connection inside an implicit transaction.
+# These statements are a maintenance/statistics best practice, NOT part of the
+# R4 deliverable (schema + bulk load + correct index). Evaluating them would
+# penalise a model for a *placement* detail rather than the index it chose, so
+# the scorer strips them (and substitutes a plain ANALYZE, which is legal in a
+# transaction) before re-applying the model's SQL. This keeps the measurement
+# focused on what R4 is supposed to test.
+# --------------------------------------------------------------------------- #
+_VACUUM_LINE_RE = re.compile(
+    r"^\s*VACUUM\b"                          # VACUUM / VACUUM ANALYZE / VACUUM (FULL)
+    r"(?![\w(])"                              # ...not the start of another word
+    r"[^;]*;?\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_maintenance(sql_text: str) -> tuple[str, bool]:
+    """Remove top-level maintenance statements Postgres forbids in a transaction.
+
+    Returns ``(filtered_sql, stripped_any)``. VACUUM is dropped entirely and an
+    ANALYZE is emitted in its place so the planner still gets fresh statistics;
+    a bare ANALYZE (already legal in a transaction) is left untouched.
+    """
+    out: list[str] = []
+    stripped = False
+    for line in sql_text.splitlines():
+        if _VACUUM_LINE_RE.match(line):
+            tables = re.sub(r"^\s*VACUUM\b", "", line, flags=re.IGNORECASE)
+            tables = re.sub(r"^\s*(FULL|FREEZE|VERBOSE|ANALYZE)?\b", "", tables, flags=re.IGNORECASE)
+            tables = tables.strip().rstrip(";").strip()
+            out.append(f"ANALYZE {tables};" if tables else "-- (VACUUM stripped by scorer)")
+            stripped = True
+        else:
+            out.append(line)
+    return "\n".join(out), stripped
+
+
 def score(
     output_text: str,
     *,
@@ -47,6 +93,12 @@ def score(
         return res
 
     res.checks["adds_index"] = bool(re.search(r"\bcreate\s+(unique\s+)?index\b", sql_text, re.I))
+
+    # Maintenance statements (VACUUM) are stripped: they cannot run inside a
+    # transaction block and are not part of the R4 deliverable. VACUUM ANALYZE
+    # is replaced with a transaction-legal ANALYZE so planner stats stay fresh.
+    sql_text, vacuum_stripped = strip_maintenance(sql_text)
+    res.checks["maintenance_statements_stripped"] = vacuum_stripped
 
     ok, dsn = pg_available()
     if not ok:

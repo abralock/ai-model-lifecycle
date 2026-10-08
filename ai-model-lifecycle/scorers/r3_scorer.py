@@ -29,14 +29,25 @@ from .base import ScoreResult, cli, parse_files, pg_available
 CASE_ID = "r3_oracle_to_postgres"
 CASE_DIR = Path(__file__).resolve().parent.parent / "cases" / CASE_ID
 
-ORACLE_TOKENS = ["DUAL", "NVL(", "ROWNUM", "(+)", "VARCHAR2", "sysdate", "%ROWTYPE", "%TYPE"]
+# Oracle-only tokens. NOTE: %ROWTYPE/%TYPE are deliberately NOT listed — they are
+# valid plpgsql and appear in correct translations.
+ORACLE_TOKENS = ["DUAL", "NVL(", "ROWNUM", "(+)", "VARCHAR2", "sysdate"]
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """Remove -- line comments and /* */ block comments so dialect scanning
+    ignores explanatory notes that legitimately mention Oracle keywords."""
+    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
+    sql = re.sub(r"--[^\n]*", " ", sql)
+    return sql
 
 
 def _read_output_text_for_dialect(text: str) -> str:
     """Prefer only the code inside FILE blocks for the dialect scan (avoid false
-    positives from prose). Falls back to the whole text."""
+    positives from prose). Falls back to the whole text. Comments are stripped."""
     files = parse_files(text)
-    return "\n".join(files.values()) if files else text
+    body = "\n".join(files.values()) if files else text
+    return _strip_sql_comments(body)
 
 
 def _dialect_hits(sql: str) -> list[str]:
@@ -47,7 +58,7 @@ def _dialect_hits(sql: str) -> list[str]:
             if tok in sql:
                 hits.append(tok)
         else:
-            if re.search(rf"\b{re.escape(tok.strip('%'))}\b", sql, re.IGNORECASE) or tok in sql:
+            if re.search(rf"\b{re.escape(tok.strip('%'))}\b", sql, re.IGNORECASE):
                 hits.append(tok)
     return sorted(set(hits))
 

@@ -73,6 +73,7 @@ CREATE OR REPLACE PROCEDURE sp_customer_tier()
 LANGUAGE plpgsql AS $$
 DECLARE
     v_tier varchar(20);
+    rec    record;            -- explicit record decl (required by some PG builds)
 BEGIN
     DELETE FROM customer_tiers;
 
@@ -108,6 +109,7 @@ CREATE OR REPLACE PROCEDURE sp_monthly_report(p_month varchar)
 LANGUAGE plpgsql AS $$
 DECLARE
     v_row      monthly_report%ROWTYPE;
+    rec        record;        -- explicit record decl (required by some PG builds)
     v_has_data bigint := 0;
 BEGIN
     SELECT COUNT(*) INTO v_has_data FROM customers;

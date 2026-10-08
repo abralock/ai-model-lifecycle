@@ -72,6 +72,18 @@ Overall score  = Σ (scenario score × scenario weight)
 
 Weights: **Quality 0.5 / Cost 0.3 / Time 0.2**.
 
+### Token reporting (locked in — both raw counts AND normalized views)
+Per model, per case, and as rolled-up totals:
+
+**Raw counts**
+- input tokens / output tokens / cache-read tokens / cache-write tokens
+- **total token spend** = input + output + cache-read + cache-write
+
+**Normalized views**
+- tokens per successful task
+- cache hit-rate % = cache-read / (cache-read + cache-write)
+- cost per successful task
+
 ### Gate 1 exit criteria
 
 1. Overall score ≥ incumbent model's score, **or** equal score at lower cost/latency.

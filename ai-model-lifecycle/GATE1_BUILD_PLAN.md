@@ -90,6 +90,9 @@ Blocking inputs required before code:
 
 ### Phase 4 — Scorecard + reporting (Pikachu)
 - `report.py`: Time/Quality/Cost per scenario, normalized 0–100 vs baseline, weighted overall score, go/no-go flags.
+- **Token reporting — both raw counts AND normalized views (locked in):**
+  - *Raw counts* (per model, per case, and totals): input tokens, output tokens, cache-read tokens, cache-write tokens, and **total token spend** (sum of the four).
+  - *Normalized views:* tokens per successful task, cache hit-rate % (`cache-read / (cache-read + cache-write)`), cost per successful task.
 
 ### Phase 5 — E2E + eval CI (Charmander)
 - Playwright/Cypress E2E for the migrated-Angular case.

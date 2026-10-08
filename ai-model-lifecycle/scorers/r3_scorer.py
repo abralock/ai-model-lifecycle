@@ -1,13 +1,19 @@
 """scorers/r3_scorer.py — Oracle PL/SQL → PostgreSQL plpgsql scorer.
 
 Steps:
-  1. Load the golden schema + seed + golden procedures into the live Postgres
-     (localhost:5432/aidb) to get a known-good baseline snapshot... actually we
-     load the *golden* definitions, run them, and snapshot the two result sets.
-  2. Apply the MODEL's SQL (schema + procedures) into a clean schema, run it, and
-     compare the result sets to golden_output.csv / golden_output_monthly.csv via
-     pandas.
-  3. Dialect-token check: grep the model output for Oracle-only keywords.
+  1. Dialect check: grep the model output for Oracle-only keywords.
+  2. Parity check (SOUND): the model's SQL is applied into its OWN freshly
+     created, isolated schema (`r3_model_*`), with `search_path` pointing at that
+     schema only. The golden reference is built in a separate isolated schema
+     (`r3_golden_*`) so the two never share objects or `search_path`.
+
+     Crucially, the model must define EVERY expected object (tables + both
+     procedures) inside its own schema. If it returns dialect-clean junk
+     (e.g. `SELECT 1;`), the expected procedures will not exist -> FAIL with a
+     clear "model did not define ..." reason, instead of trivially passing
+     against a pre-seeded golden schema.
+  3. Both temporary schemas are dropped afterwards, so no state leaks between
+     runs.
 
 Robustness: if Postgres is unreachable or psycopg2 is missing, falls back to the
 dialect-token check only and marks parity as "unverified" (never crashes).
@@ -20,6 +26,7 @@ from __future__ import annotations
 
 import io
 import re
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -32,6 +39,24 @@ CASE_DIR = Path(__file__).resolve().parent.parent / "cases" / CASE_ID
 # Oracle-only tokens. NOTE: %ROWTYPE/%TYPE are deliberately NOT listed — they are
 # valid plpgsql and appear in correct translations.
 ORACLE_TOKENS = ["DUAL", "NVL(", "ROWNUM", "(+)", "VARCHAR2", "sysdate"]
+
+# Objects the model is required to create itself. If any is missing from the
+# model's isolated schema, parity cannot be meaningful -> explicit FAIL.
+EXPECTED_TABLES = (
+    "customers",
+    "orders",
+    "customer_tiers",
+    "products",
+    "order_items",
+    "monthly_report",
+)
+EXPECTED_PROCEDURES = ("sp_customer_tier", "sp_monthly_report")
+
+# Result-set comparison contract for sp_customer_tier().
+TIER_SELECT = (
+    "SELECT customer_id, customer_name, total_spend, order_count, tier "
+    "FROM customer_tiers ORDER BY customer_id;"
+)
 
 
 def _strip_sql_comments(sql: str) -> str:
@@ -63,45 +88,129 @@ def _dialect_hits(sql: str) -> list[str]:
     return sorted(set(hits))
 
 
-def _golden_frame(dsn: str, golden_sql: str, seed_sql: str) -> pd.DataFrame:
-    """Load golden schema+seed+procs, run sp_customer_tier, return result frame."""
+# --------------------------------------------------------------------------- #
+# isolated-schema helpers                                                      #
+# --------------------------------------------------------------------------- #
+def _new_schema_name(prefix: str) -> str:
+    """A unique, collision-free, lowercase identifier for a scratch schema."""
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def _drop_schema(conn, schema: str) -> None:
+    """Best-effort DROP SCHEMA ... CASCADE, tolerated if already gone."""
+    with conn.cursor() as cur:
+        cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;')
+
+
+def _missing_objects(cur, schema: str) -> list[str]:
+    """Return expected objects (tables + procedures) absent from `schema`."""
+    missing: list[str] = []
+
+    cur.execute(
+        "SELECT tablename FROM pg_tables WHERE schemaname = %s;", (schema,)
+    )
+    tables = {row[0] for row in cur.fetchall()}
+    for t in EXPECTED_TABLES:
+        if t not in tables:
+            missing.append(f"table:{t}")
+
+    cur.execute(
+        "SELECT p.proname FROM pg_proc p "
+        "JOIN pg_namespace n ON n.oid = p.pronamespace "
+        "WHERE n.nspname = %s;",
+        (schema,),
+    )
+    procs = {row[0] for row in cur.fetchall()}
+    for p in EXPECTED_PROCEDURES:
+        if p not in procs:
+            missing.append(f"procedure:{p}")
+
+    return missing
+
+
+def _golden_frame(dsn: str) -> pd.DataFrame:
+    """Build the golden reference in its OWN isolated schema and return the
+    sp_customer_tier() result frame. The schema is dropped afterwards."""
     import psycopg2  # type: ignore
-    with psycopg2.connect(dsn) as conn:
+
+    golden_sql = (CASE_DIR / "golden_postgres.sql").read_text(encoding="utf-8")
+    seed_sql = (CASE_DIR / "seed.sql").read_text(encoding="utf-8")
+    schema = _new_schema_name("r3_golden")
+
+    conn = psycopg2.connect(dsn)
+    try:
         with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA "{schema}";')
+            # search_path EXCLUSIVELY our scratch schema: no golden object ever
+            # lands in (or is read from) public/other schemas.
+            cur.execute(f'SET search_path TO "{schema}";')
             cur.execute(golden_sql)
             cur.execute(seed_sql)
         conn.commit()
+
         with conn.cursor() as cur:
             cur.execute("CALL sp_customer_tier();")
-            cur.execute(
-                "SELECT customer_id, customer_name, total_spend, order_count, tier "
-                "FROM customer_tiers ORDER BY customer_id;"
-            )
+            cur.execute(TIER_SELECT)
             rows = cur.fetchall()
             cols = [d[0] for d in cur.description]
-        conn.rollback()
-    return pd.DataFrame(rows, columns=cols)
+        return pd.DataFrame(rows, columns=cols)
+    finally:
+        try:
+            conn.rollback()
+            _drop_schema(conn, schema)
+            conn.commit()
+        finally:
+            conn.close()
 
 
-def _model_frame(dsn: str, model_sql: str, model_monthly: bool) -> pd.DataFrame:
-    """Apply ONLY the model's SQL in a fresh search_path, seed, run, return frame."""
+def _model_frame(dsn: str, model_sql: str) -> pd.DataFrame:
+    """Apply ONLY the model's SQL into a freshly created, isolated schema.
+
+    Raises ``_MissingObjects`` if the model failed to define any expected
+    table/procedure. The schema is dropped afterwards in all cases.
+    """
     import psycopg2  # type: ignore
+
     seed_sql = (CASE_DIR / "seed.sql").read_text(encoding="utf-8")
-    with psycopg2.connect(dsn) as conn:
+    schema = _new_schema_name("r3_model")
+
+    conn = psycopg2.connect(dsn)
+    try:
         with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA "{schema}";')
+            cur.execute(f'SET search_path TO "{schema}";')
+            # model DDL + procedures (defining their own tables in this schema)
             cur.execute(model_sql)
         conn.commit()
+
         with conn.cursor() as cur:
+            missing = _missing_objects(cur, schema)
+        if missing:
+            raise _MissingObjects(missing)
+
+        with conn.cursor() as cur:
+            cur.execute(f'SET search_path TO "{schema}";')
             cur.execute(seed_sql)
             cur.execute("CALL sp_customer_tier();")
-            cur.execute(
-                "SELECT customer_id, customer_name, total_spend, order_count, tier "
-                "FROM customer_tiers ORDER BY customer_id;"
-            )
+            cur.execute(TIER_SELECT)
             rows = cur.fetchall()
             cols = [d[0] for d in cur.description]
-        conn.rollback()
-    return pd.DataFrame(rows, columns=cols)
+        return pd.DataFrame(rows, columns=cols)
+    finally:
+        try:
+            conn.rollback()
+            _drop_schema(conn, schema)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+class _MissingObjects(Exception):
+    """Raised when the model's schema lacks expected tables/procedures."""
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = missing
+        super().__init__(", ".join(missing))
 
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
@@ -138,11 +247,10 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
         res.reason = f"postgres unavailable ({dsn}); dialect_clean={res.checks['dialect_clean']}"
         return res
 
+    missing: list[str] = []
     try:
-        golden_sql = (CASE_DIR / "golden_postgres.sql").read_text(encoding="utf-8")
-        seed_sql = (CASE_DIR / "seed.sql").read_text(encoding="utf-8")
-        golden = _golden_frame(dsn, golden_sql, seed_sql)
-        produced = _model_frame(dsn, sql_text, model_monthly=False)
+        golden = _golden_frame(dsn)
+        produced = _model_frame(dsn, sql_text)
 
         g = _normalize(golden)
         p = _normalize(produced)
@@ -162,6 +270,14 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
             # small diff sample for the report
             res.details["golden_rows"] = g.head(10).to_dict("records")
             res.details["produced_rows"] = p.head(10).to_dict("records")
+    except _MissingObjects as exc:
+        # Sound failure: the model never defined the expected schema/procedures.
+        res.checks["parity"] = False
+        res.checks["objects_defined"] = False
+        missing = exc.missing
+        res.details["missing_objects"] = missing
+        first = missing[0].split(":", 1)[1] if ":" in missing[0] else missing[0]
+        res.details["error"] = f"model did not define {first}"
     except Exception as exc:  # noqa: BLE001 - malformed SQL must not crash the run
         res.checks["parity"] = False
         res.details["error"] = f"{type(exc).__name__}: {exc}"
@@ -172,7 +288,10 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
         parts = []
         if not res.checks.get("dialect_clean"):
             parts.append("oracle tokens: " + ",".join(hits))
-        if not res.checks.get("parity"):
+        if missing:
+            first = missing[0].split(":", 1)[1] if ":" in missing[0] else missing[0]
+            parts.append(f"model did not define {first}")
+        elif not res.checks.get("parity"):
             parts.append("result set != golden")
         res.reason = "; ".join(parts) or "failed"
     else:

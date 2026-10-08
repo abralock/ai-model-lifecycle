@@ -9,7 +9,7 @@ venv/
 *.egg-info/
 
 # Test output / run logs
-runs/
+# results are the durable record — keep committed
 *.log
 results/
 

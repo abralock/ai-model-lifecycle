@@ -31,11 +31,21 @@ class Price:
     cache_write: float = 0.0
 
 
-# USD per 1M tokens. Anthropic prompt-cache reads are ~10% of input price, writes
+# USD per 1M tokens. Anthropic prompt-cache reads are ~5% of input price, writes
 # ~125% of input price — reflected below.
+#
+# Pilot-model prices verified live against the OpenRouter model catalog on
+# 2026-10-08:
+#   anthropic/claude-opus-4.8  -> input $5.00 / output $25.00 per 1M
+#   anthropic/claude-opus-5.5  -> input $4.00 / output $20.00 per 1M
+# Exact cache buckets were not published in the catalog snapshot; the values
+# below assume the standard Anthropic cache ratios (read ~5% of input, write
+# ~125% of input). They are deliberately different from the previous
+# (incorrect) $1.50 / $18.75 pair. Update if OpenRouter publishes exact cache
+# rates.
 PRICES: dict[str, Price] = {
-    "anthropic/claude-opus-4.8": Price(input=15.0, output=75.0, cache_read=1.50, cache_write=18.75),
-    "anthropic/claude-opus-5.5": Price(input=15.0, output=75.0, cache_read=1.50, cache_write=18.75),
+    "anthropic/claude-opus-4.8": Price(input=5.0, output=25.0, cache_read=0.25, cache_write=6.25),
+    "anthropic/claude-opus-5.5": Price(input=4.0, output=20.0, cache_read=0.20, cache_write=5.00),
     # --- placeholders for the remaining matrix (adjust when enabled) ---
     "anthropic/claude-sonnet-5": Price(input=3.0, output=15.0, cache_read=0.30, cache_write=3.75),
     "anthropic/claude-sonnet-5.5": Price(input=3.0, output=15.0, cache_read=0.30, cache_write=3.75),

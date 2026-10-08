@@ -135,9 +135,12 @@ def test_r1_scorer_static_pass_and_fail():
 # pricing / cost                                                               #
 # --------------------------------------------------------------------------- #
 def test_cost_math():
-    # 1M input @ 15 USD + 1M output @ 75 USD
+    # 1M input @ 5 USD + 1M output @ 25 USD (opus-4.8, verified 2026-10-08)
     c = cost_usd("anthropic/claude-opus-4.8", input_tokens=1_000_000, output_tokens=1_000_000)
-    assert abs(c - 90.0) < 1e-9
+    assert abs(c - 30.0) < 1e-9
+    # 1M input @ 4 USD + 1M output @ 20 USD (opus-5.5, verified 2026-10-08)
+    c2 = cost_usd("anthropic/claude-opus-5.5", input_tokens=1_000_000, output_tokens=1_000_000)
+    assert abs(c2 - 24.0) < 1e-9
 
 
 def test_unknown_model_uses_default_price():

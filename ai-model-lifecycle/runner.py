@@ -282,6 +282,7 @@ def run_case(
     role: str,
     *,
     dry_run: bool = False,
+    rep: int = 0,
 ) -> RunResult:
     prompt = build_prompt(case_id)
     usage, attempts, latency, text, finish_reason, err = call_model(
@@ -312,10 +313,9 @@ def run_case(
         created_at=time.time(),
         **usage,
     )
-    path = run_path(pair_id, model.id, case_id)
+    path = run_path(pair_id, model.id, case_id, rep=rep)
     save_run(asdict(result), path)
     return result
-
 
 def run_pair(
     cfg: Config,
@@ -323,16 +323,20 @@ def run_pair(
     *,
     case: str | None = None,
     dry_run: bool = False,
+    repeats: int = 1,
 ) -> list[RunResult]:
     pair = cfg.get_pair(pair_id)
     results: list[RunResult] = []
     for case_id in cfg.selected_cases(case):
         for model, role in ((pair.current, "current"), (pair.target, "target")):
-            res = run_case(cfg, pair_id, case_id, model, role, dry_run=dry_run)
-            status = "OK" if res.ok else f"FAIL ({res.error})"
-            print(f"[{pair_id}] {role:7s} {model.name:20s} {case_id:24s} "
-                  f"{res.latency_s:7.2f}s  {status}", file=sys.stderr)
-            results.append(res)
+            for rep in range(repeats):
+                res = run_case(cfg, pair_id, case_id, model, role, dry_run=dry_run)
+                status = "OK" if res.ok else f"FAIL ({res.error})"
+                tag = f" [rep {rep+1}/{repeats}]" if repeats > 1 else ""
+                print(f"[{pair_id}] {role:7s} {model.name:20s} {case_id:24s} "
+                      f"{res.latency_s:7.2f}s{tag}  {status}", file=sys.stderr)
+                if res.ok:
+                    results.append(res)
     return results
 
 
@@ -344,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pair", help="pair id from models.yaml (e.g. opus-4.8-vs-5.5)")
     ap.add_argument("--all-pairs", action="store_true", help="run every pair in models.yaml")
     ap.add_argument("--case", help="run a single case id (default: all cases for the pair)")
+    ap.add_argument("--repeats", type=int, default=1, metavar="N",
+                    help="run each (model, case) N times to capture latency/cost variance")
     ap.add_argument("--dry-run", action="store_true",
                     help="build prompts only, no network calls (CI-safe)")
     args = ap.parse_args(argv)
@@ -359,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("pass --pair <id> or --all-pairs")
 
     for pid in pair_ids:
-        run_pair(cfg, pid, case=args.case, dry_run=args.dry_run)
+        run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats)
     return 0
 
 

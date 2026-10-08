@@ -122,13 +122,16 @@ def load_config(path: Path | str | None = None) -> Config:
 # --------------------------------------------------------------------------- #
 # run IO                                                                       #
 # --------------------------------------------------------------------------- #
-def run_path(pair_id: str, model_slug: str, case_id: str) -> Path:
+def run_path(pair_id: str, model_slug: str, case_id: str, rep: int = 0) -> Path:
     """Canonical path for a per-run JSON: runs/<pair>/<model>.<case>.json.
 
     The model slug contains '/' (e.g. anthropic/claude-opus-4.8); we keep the
     full slug in the filename but flatten '/' -> '__' to stay filesystem-safe.
+    `rep` > 0 distinguishes repeated runs (rep 0 keeps the canonical name).
     """
     safe_model = model_slug.replace("/", "__")
+    if rep > 0:
+        return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.r{rep}.json"
     return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.json"
 
 

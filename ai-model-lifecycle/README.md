@@ -8,13 +8,29 @@ Dev box for scoring AI models on fixed coding tasks (Time / Quality / Cost).
 - `runner.py` — litellm harness
 - `scorers/` — deterministic checks
 - `report.py` — scorecard (raw + normalized token/cost/time views)
-- `docker/` — Postgres (and optional Oracle) containers for DB cases
+- `docker/` — Postgres container for the DB cases
 
 ## Setup
-1. `cp .env.example .env` and fill `OPENROUTER_TOKEN`
-2. `docker compose -f docker/docker-compose.yml up -d`
-3. `uv sync` (or `pip install -r requirements.txt`)
-4. `python runner.py --pair opus-4.8-vs-5.5`
+
+New to this repo, or running it on a home PC? Follow
+**[RUN_AT_HOME.md](RUN_AT_HOME.md)** for a step-by-step guide (prerequisites,
+Windows/WSL notes, cost, troubleshooting, opencode/Claude Code prompts).
+
+Short version (Docker running, Python 3.11+):
+
+```bash
+cp .env.example .env                       # then set OPENROUTER_TOKEN
+uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
+#   or: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+source .venv/bin/activate
+docker compose -f docker/docker-compose.yml up -d
+pytest -q                                  # must pass with nothing skipped
+python runner.py --pair opus-4.8-vs-5.5 --repeats 3
+python report.py --pair opus-4.8-vs-5.5
+```
+
+There is no `pyproject.toml`, so `uv sync` does not apply; install from
+`requirements.txt` as above.
 
 ## Harness (Gate 1)
 
@@ -71,4 +87,4 @@ pytest -q
 - `report.py` — scorecard with raw + normalized token/cost/time views
 - `docker/` — Postgres 16 for the data cases
 
-Output runs to `runs/<pair_id>/` (gitignored), scorecard at `runs/<pair_id>/REPORT.md`.
+Output runs to `runs/<pair_id>/` (committed as the durable record), scorecard at `runs/<pair_id>/REPORT.md`.

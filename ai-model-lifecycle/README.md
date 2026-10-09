@@ -30,7 +30,7 @@ python runner.py --pair opus-4.8-vs-5.5 --dry-run
 # score + build the scorecard
 python report.py --pair opus-4.8-vs-5.5           # live scorers
 python report.py --pair opus-4.8-vs-5.5 --no-score # fast, uses runner ok-flag
-python report.py --pair opus-4.8-vs-5.5 --list-runs              # run ids present
+python report.py --pair opus-4.8-vs-5.5 --list-runs              # run ids, complete/partial
 python report.py --pair opus-4.8-vs-5.5 --run 20261009T143005Z   # score a past run
 
 # individual scorers
@@ -43,7 +43,9 @@ pytest -q
 ## Scoring notes
 - Each `runner.py` invocation gets one **run id** (its UTC start time, e.g.
   `20261009T143005Z`) stamped on every file it writes. `report.py` scores **one
-  run** (the latest by default), so a re-run — even the same day, or one that
+  run** (by default the latest *complete* one: every configured case, both
+  models; a newer partial run such as `--case r4_...` is named in the header but
+  not scored — use `--run <id>` for it), so a re-run — even the same day, or one that
   crosses midnight UTC — never mixes with or overwrites an earlier one. Legacy
   date-only runs (`20261008`) keep working as run ids. `REPORT.md` only changes
   when `report.py` is run: check its `Run:` header line. It reports pass rates with 95% Wilson

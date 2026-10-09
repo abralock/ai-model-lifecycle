@@ -142,7 +142,9 @@ def test_cost_math():
 
 
 def test_unknown_model_uses_default_price():
-    assert get_price("does/not-exist").input == get_price("openai/gpt-5.6-sol").input or True
+    from pricing import DEFAULT_PRICE
+    assert get_price("does/not-exist") == DEFAULT_PRICE
+    assert get_price("does/not-exist").input == DEFAULT_PRICE.input
 
 
 # --------------------------------------------------------------------------- #

@@ -60,6 +60,12 @@ PRICES: dict[str, Price] = {
     "openai/gpt-6-terra": Price(input=2.0, output=8.0),
 }
 
+# NOTE on cache buckets: for the pilot models the OpenRouter catalog snapshot
+# (2026-10-08) published only input/output. The cache_read/cache_write values
+# below are the standard Anthropic 5%/125% ratios, NOT published figures.
+# Cost deltas in REPORT.md/VERDICT.md that rely on cache reads/writes are
+# therefore approximate; input/output-only figures are exact.
+
 # Fallback used when a model slug is not in the table. Keeps the report from
 # crashing on an unknown model — it just prices conservatively and warns.
 DEFAULT_PRICE = Price(input=3.0, output=15.0, cache_read=0.30, cache_write=3.75)

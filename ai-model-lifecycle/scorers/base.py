@@ -111,6 +111,79 @@ def pg_available() -> tuple[bool, str]:
 
 
 # --------------------------------------------------------------------------- #
+# Isolated scratch schemas + psql-semantics execution (shared by R4/R5)        #
+#                                                                              #
+# Model scripts are written for `psql`: statement-by-statement autocommit,     #
+# meta-commands like `\set ON_ERROR_STOP on`, and VACUUM outside any txn.      #
+# Running them through one psycopg2 `cur.execute()` wraps everything in a      #
+# single implicit transaction and rejects meta-commands, which fails correct   #
+# answers for harness reasons. So we execute them with real psql instead —     #
+# the local binary if present, else the one inside the Postgres container.     #
+# --------------------------------------------------------------------------- #
+def new_schema_name(prefix: str) -> str:
+    """A unique, collision-free, lowercase identifier for a scratch schema."""
+    import uuid
+
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def create_schema(dsn: str, schema: str) -> None:
+    import psycopg2  # type: ignore
+
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(f'CREATE SCHEMA "{schema}";')
+
+
+def drop_schema(dsn: str, schema: str) -> None:
+    """Best-effort DROP SCHEMA ... CASCADE; never raises."""
+    import psycopg2  # type: ignore
+
+    try:
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;')
+    except Exception:  # pragma: no cover - cleanup only
+        pass
+
+
+def _psql_command() -> list[str] | None:
+    """Return the argv prefix that runs psql against the harness DB, or None."""
+    import os
+    import shutil
+
+    user = os.environ.get("POSTGRES_USER", "ai")
+    db = os.environ.get("POSTGRES_DB", "aidb")
+    if shutil.which("psql"):
+        return ["psql", pg_dsn()]
+    container = os.environ.get("POSTGRES_CONTAINER", "aidb-postgres")
+    if shutil.which("docker"):
+        return ["docker", "exec", "-i", "-e", "PGOPTIONS", container, "psql", "-U", user, "-d", db]
+    return None
+
+
+def run_psql(sql: str, schema: str, timeout: int = 600) -> tuple[int, str]:
+    """Run `sql` through psql with search_path pinned to `schema`.
+
+    ON_ERROR_STOP=1 so any failing statement fails the script (exit code 3).
+    Returns (returncode, combined output tail).
+    """
+    import os
+    import subprocess
+
+    cmd = _psql_command()
+    if cmd is None:
+        return 127, "psql not available (neither local psql nor docker)"
+    env = dict(os.environ, PGOPTIONS=f"-c search_path={schema}")
+    try:
+        p = subprocess.run(
+            cmd + ["-X", "-q", "-v", "ON_ERROR_STOP=1"],
+            input=sql, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"psql timeout after {timeout}s"
+    return p.returncode, ((p.stdout or "") + (p.stderr or ""))[-2000:]
+
+
+# --------------------------------------------------------------------------- #
 # CLI shim                                                                     #
 # --------------------------------------------------------------------------- #
 def cli(score_fn, argv: list[str] | None = None) -> int:

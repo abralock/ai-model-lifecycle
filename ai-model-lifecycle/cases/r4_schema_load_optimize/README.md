@@ -35,10 +35,11 @@ order = status first for selectivity, then date range).
 
 | Check | Rule |
 |---|---|
-| ddl | schema applies cleanly |
+| script runs | the whole script runs under `psql` (ON_ERROR_STOP, autocommit) in an isolated schema |
 | loaded | row count == expected N |
 | index scan | plan contains an index/bitmap scan on orders |
 | no seq scan | plan contains no `Seq Scan on orders` |
 | latency | measured query time < threshold_ms |
 
-**Score = pass / fail.**
+The scorer runs `ANALYZE` on the four tables before `EXPLAIN`, as autovacuum
+would in any real database. **Score = pass / fail.**

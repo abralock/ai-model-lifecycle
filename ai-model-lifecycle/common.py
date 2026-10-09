@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,20 +144,37 @@ def save_run(record: dict[str, Any], path: Path) -> None:
         json.dump(record, fh, indent=2, ensure_ascii=False)
 
 
-def load_runs(pair_id: str) -> list[dict[str, Any]]:
-    """Load every per-run JSON for a pair. Missing dir -> empty list."""
+def run_date(filename: str) -> str | None:
+    """The YYYYMMDD stamp in a run filename (see run_path), or None."""
+    m = re.search(r"\.(\d{8})(?:\.r\d+)?\.json$", filename)
+    return m.group(1) if m else None
+
+
+def load_runs(pair_id: str, date: str | None = None) -> list[dict[str, Any]]:
+    """Load the per-run JSONs for a pair. Missing dir -> empty list.
+
+    Only one run date is loaded — `date` (YYYYMMDD) or, by default, the most
+    recent one present — so runs made under different prompts/scorers on
+    different days are never silently mixed into one scorecard. Each record
+    gets `_file` (its filename) and `_date`.
+    """
     d = RUNS_DIR / pair_id
     if not d.is_dir():
         return []
+    files = sorted(f for f in d.glob("*.json") if run_date(f.name))
+    if date is None and files:
+        date = max(run_date(f.name) for f in files)
     out: list[dict[str, Any]] = []
-    for f in sorted(d.glob("*.json")):
-        if f.name == "REPORT.md" or f.suffix != ".json":
+    for f in files:
+        if run_date(f.name) != date:
             continue
         try:
             with open(f, "r", encoding="utf-8") as fh:
-                out.append(json.load(fh))
+                rec = json.load(fh)
         except (json.JSONDecodeError, OSError):
             continue
+        rec["_file"], rec["_date"] = f.name, date
+        out.append(rec)
     return out
 
 

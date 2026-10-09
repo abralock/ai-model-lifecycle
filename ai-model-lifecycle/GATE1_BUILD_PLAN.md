@@ -165,6 +165,12 @@ Default weights: **Quality 0.5 / Cost 0.3 / Time 0.2**.
 1. Overall score ≥ incumbent, or equal score at lower cost/latency.
 2. Regression subset (R1, R3, C1, C2, T2) pass rate = **100%**.
 
+**Statistical power note (added 2026-10-09):** with the current 4 cases at `--repeats 1`,
+a quality gap of even 1/4 vs 0/4 is not significant (Fisher p ≈ 1.0 at n=4 vs 4).
+Before treating any *future* current-vs-target quality gap as real, either add more
+cases or run `--repeats 2` (or more) so the Wilson interval and Fisher test have
+enough samples to distinguish signal from noise.
+
 ---
 
 ## 8. Personal AI Dev Box — toolchain

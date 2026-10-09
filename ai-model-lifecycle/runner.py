@@ -44,10 +44,12 @@ from common import (
 )
 
 # Files, per case, that should be inlined into the prompt (relative to the case
-# dir). Order matters. Cases not listed here are sent with only prompt.md plus a
-# directory listing, and the model is told it may ask for more.
+# dir). Order matters; glob patterns are expanded in sorted order. Cases not
+# listed here are sent with only prompt.md plus a directory listing.
 INLINE_ARTIFACTS: dict[str, list[str]] = {
-    "r1_springboot2to3": [],          # whole Maven tree is attached as a file listing
+    # the model must see the real sources to migrate them (with only a listing it
+    # can either refuse or invent code, and invented code is not a migration)
+    "r1_springboot2to3": ["pom.xml", "src/**/*"],
     "r3_oracle_to_postgres": [
         "procedures/sp_customer_tier.sql",
         "procedures/sp_monthly_report.sql",
@@ -75,6 +77,7 @@ class RunResult:
     role: str                       # "current" | "target"
     temperature: float
     max_tokens: int
+    rep: int = 0                    # repeat index (0-based) within one --repeats run
     # --- usage ---
     input_tokens: int = 0
     output_tokens: int = 0
@@ -116,7 +119,12 @@ def build_prompt(case_id: str) -> str:
 
     parts: list[str] = [prompt_file.read_text(encoding="utf-8").strip()]
 
-    inlines = INLINE_ARTIFACTS.get(case_id, [])
+    inlines: list[str] = []
+    for pattern in INLINE_ARTIFACTS.get(case_id, []):
+        if any(ch in pattern for ch in "*?["):
+            inlines += sorted(str(p.relative_to(cd)) for p in cd.glob(pattern) if p.is_file())
+        else:
+            inlines.append(pattern)
     for rel in inlines:
         f = cd / rel
         if f.is_file():
@@ -301,6 +309,7 @@ def run_case(
         model_slug=model.id,
         model_name=model.name,
         role=role,
+        rep=rep,
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens,
         latency_s=round(latency, 4),

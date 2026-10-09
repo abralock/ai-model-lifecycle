@@ -1,3 +1,10 @@
+> **SUPERSEDED (2026-10-09).** This audit predates the re-run with
+> `--repeats 3` and its conclusions no longer match the stored runs. Its R4 fix
+> (`strip_maintenance`) did not handle `VACUUM (ANALYZE) t;`, so Opus 5.5 kept
+> failing R4 on a harness artifact; it has been replaced by running model SQL
+> under real `psql` in an isolated schema. See the `fix/harness-scoring-soundness`
+> branch and the current `REPORT.md`.
+
 # VERDICT — R4 / R5 audit (opus-4.8-vs-5.5)
 
 > Author: Charmander 🔥 (Gate 1 tester) · Date: 2026-10-08

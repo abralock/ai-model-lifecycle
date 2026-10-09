@@ -1,13 +1,24 @@
 """scorers/r5_scorer.py — ETL into Dashboard + reconciliation scorer.
 
 Steps:
-  1. Ensure source tables exist (reuse R4 seed if empty; otherwise use whatever
-     the continuity chain already produced).
-  2. Apply the dashboard schema, then run the MODEL's ETL SQL.
+  1. Build a fresh, isolated scratch schema (`r5_<uuid>`) holding a FIXED source
+     dataset: R4's frozen `schema.sql` + the deterministic R4 seeder (20k orders),
+     extended with the cases etl_spec.md §5 exists for — multi-category orders
+     (extra lines in other categories) and COMPLETED orders with no lines. The
+     R4 seed alone has exactly one line per order, which would let a naive
+     line-grain rollup pass. Every model is scored on identical data,
+     independent of whatever earlier scoring left in the database.
+  2. Apply the dashboard schema, then run the MODEL's ETL with psql semantics
+     (see `scorers.base.run_psql`).
   3. Verify reconciliation: source_order_count - loaded_order_count == 0
      (both from the model's OWN etl_run_log row, and independently recomputed).
   4. Verify idempotency: run the ETL twice; dashboard row counts must be stable.
   5. Verify both dashboard tables are non-empty.
+  6. Drop the scratch schema.
+
+Note: the R3->R4->R5 *continuity* chain (R5 on the model's own R4 output) is
+deliberately not scored here — mixing it in made results depend on scoring
+order. It should be its own explicit check.
 
 Robustness: no Postgres / malformed SQL -> structured fail, never a crash.
 
@@ -17,13 +28,41 @@ Usage:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-from .base import ScoreResult, cli, parse_files, pg_available
+from .base import (
+    ScoreResult,
+    cli,
+    create_schema,
+    drop_schema,
+    new_schema_name,
+    parse_files,
+    pg_available,
+    run_psql,
+)
 
 CASE_ID = "r5_etl_dashboard"
 CASE_DIR = Path(__file__).resolve().parent.parent / "cases" / CASE_ID
+R4_DIR = CASE_DIR.parent / "r4_schema_load_optimize"
+FIXTURE_ROWS = 20_000
+
+# Applied after the R4 seed (product category = product_id % 5, so product_id+1
+# is always a different category). New lines get higher order_item_ids, so the
+# seed's line stays each order's controlling line.
+FIXTURE_EXTRA_SQL = f"""
+INSERT INTO order_items (order_item_id, order_id, product_id, quantity, unit_price)
+SELECT {FIXTURE_ROWS} + o.order_id, o.order_id, 1 + (oi.product_id % 200), 2, 19.99
+FROM   orders o JOIN order_items oi ON oi.order_id = o.order_id
+WHERE  o.order_id % 2 = 0;                       -- 2-category orders
+
+INSERT INTO order_items (order_item_id, order_id, product_id, quantity, unit_price)
+SELECT {2 * FIXTURE_ROWS} + o.order_id, o.order_id, 1 + ((oi.product_id + 1) % 200), 1, 5.00
+FROM   orders o JOIN order_items oi ON oi.order_id = o.order_id
+WHERE  o.order_id % 5 = 0 AND oi.order_item_id <= {FIXTURE_ROWS};   -- 3-category
+
+DELETE FROM order_items WHERE order_id % 97 = 0;  -- orders with no lines
+ANALYZE order_items;
+"""
 
 
 def _table_counts(cur, table: str) -> int | None:
@@ -32,6 +71,20 @@ def _table_counts(cur, table: str) -> int | None:
         return int(cur.fetchone()[0])
     except Exception:
         return None
+
+
+def build_fixture(dsn: str, schema: str) -> None:
+    """Create the fixed R5 source dataset + empty dashboard tables in `schema`."""
+    import psycopg2  # type: ignore
+
+    from cases.r4_schema_load_optimize import seed as r4_seed  # type: ignore
+
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(f'SET search_path TO "{schema}";')
+        cur.execute((R4_DIR / "schema.sql").read_text(encoding="utf-8"))
+        cur.execute(r4_seed.build_sql(rows=FIXTURE_ROWS))
+        cur.execute(FIXTURE_EXTRA_SQL)
+        cur.execute((CASE_DIR / "dashboard_schema.sql").read_text(encoding="utf-8"))
 
 
 def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None) -> ScoreResult:
@@ -50,42 +103,21 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
         res.reason = f"postgres unavailable ({dsn})"
         return res
 
+    schema = new_schema_name("r5")
     try:
         import psycopg2  # type: ignore
 
-        # Ensure source tables exist with data. If R4 hasn't run in this DB, seed
-        # a default set so R5 is independently scorable.
-        from cases.r4_schema_load_optimize import seed as r4_seed  # type: ignore
+        create_schema(dsn, schema)
+        build_fixture(dsn, schema)
 
-        dash_schema = (CASE_DIR / "dashboard_schema.sql").read_text(encoding="utf-8")
+        rc, out = run_psql(sql_text, schema)
+        res.checks["etl_runs"] = rc == 0
+        if rc != 0:
+            res.details["error"] = f"model ETL failed under psql (rc={rc}): {out[-600:]}"
 
         with psycopg2.connect(dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM information_schema.tables "
-                    "WHERE table_name = 'orders';"
-                )
-                has_orders = cur.fetchone()[0] > 0
-                order_count = _table_counts(cur, "orders") if has_orders else 0
-                if not has_orders or not order_count:
-                    cur.execute(
-                        "DROP TABLE IF EXISTS order_items, orders, products, customers CASCADE;"
-                    )
-                    conn.commit()
-                    cur.execute(
-                        (CASE_DIR.parent / "r4_schema_load_optimize" / "schema.sql").read_text(
-                            encoding="utf-8"
-                        )
-                    )
-                    conn.commit()
-                    cur.execute(r4_seed.build_sql(rows=20_000))
-                    conn.commit()
-
-                # apply dashboard schema, then the model's ETL
-                cur.execute(dash_schema)
-                conn.commit()
-                cur.execute(sql_text)
-                conn.commit()
+                cur.execute(f'SET search_path TO "{schema}";')
 
                 # --- reconciliation (independent recompute) ---------------- #
                 cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'COMPLETED';")
@@ -94,9 +126,7 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
                 loaded = int(cur.fetchone()[0])
                 res.details["source_order_count"] = src
                 res.details["loaded_order_count"] = loaded
-                # mismatch must be zero AND the rollup must carry real orders:
-                # an empty rollup (loaded == 0) reconciles to zero only when the
-                # source is also empty, which would defeat the gate's intent.
+                # an empty rollup must not "reconcile" to zero
                 res.checks["reconciliation_zero"] = (src == loaded) and (loaded > 0)
 
                 # --- model's own etl_run_log row --------------------------- #
@@ -122,24 +152,25 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
                 res.details["dash_rows"] = {"category": cat_n, "country": cty_n}
                 res.checks["dataset_loads"] = cat_n > 0 and cty_n > 0
 
-                # --- idempotency: run ETL a 2nd time ----------------------- #
-                first = (cat_n, cty_n)
-                cur.execute("DELETE FROM etl_run_log;")
-                cur.execute(sql_text)
-                conn.commit()
-                second = (
-                    _table_counts(cur, "dash_revenue_by_category"),
-                    _table_counts(cur, "dash_revenue_by_country"),
-                )
-                res.details["idempotent_counts"] = {"first": first, "second": second}
-                res.checks["idempotent"] = first == second
-            conn.rollback()
+        # --- idempotency: run the ETL a 2nd time ----------------------- #
+        first = (cat_n, cty_n)
+        rc2, out2 = run_psql(sql_text, schema)
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(f'SET search_path TO "{schema}";')
+            second = (
+                _table_counts(cur, "dash_revenue_by_category"),
+                _table_counts(cur, "dash_revenue_by_country"),
+            )
+            cur.execute("SELECT COALESCE(SUM(order_count), 0) FROM dash_revenue_by_category;")
+            loaded2 = int(cur.fetchone()[0])
+        res.details["idempotent_counts"] = {"first": first, "second": second}
+        res.checks["idempotent"] = rc2 == 0 and first == second and loaded2 == loaded
     except Exception as exc:  # noqa: BLE001
-        for k in ("reconciliation_zero", "log_mismatch_zero", "dataset_loads", "idempotent"):
-            res.checks.setdefault(k, False)
         res.details["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        drop_schema(dsn, schema)
 
-    required = ["reconciliation_zero", "log_mismatch_zero", "dataset_loads", "idempotent"]
+    required = ["etl_runs", "reconciliation_zero", "log_mismatch_zero", "dataset_loads", "idempotent"]
     res.passed = all(res.checks.get(k, False) for k in required)
     res.score = 1.0 if res.passed else 0.0
     if not res.passed:

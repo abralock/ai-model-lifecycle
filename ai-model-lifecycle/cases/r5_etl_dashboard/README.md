@@ -8,8 +8,12 @@ Build an ETL that transforms the R4 source tables (`orders`, `order_items`,
 `products`, `customers`) into the dashboard aggregate tables defined in
 `dashboard_schema.sql`, and **reconcile** row counts so `mismatch = 0`.
 
-This is the last link in the **R3 → R4 → R5** continuity chain: the model's ETL
-runs against **its own** R4-loaded tables, not a clean fixture.
+Designed as the last link in the **R3 → R4 → R5** continuity chain. For a fair
+comparison the scorer runs every model's ETL against the **same fixed dataset**
+(R4 schema + deterministic seed, extended with multi-category orders and
+COMPLETED orders without lines) in an isolated schema. Scoring the ETL on each
+model's own R4 data made results depend on scoring order; continuity should be
+scored as a separate, explicit check.
 
 ## Input
 
@@ -36,11 +40,11 @@ Running it twice must be idempotent.
 
 | Check | Rule |
 |---|---|
-| etl runs | model ETL executes without error |
+| etl runs | model ETL executes without error under `psql` (ON_ERROR_STOP) |
 | reconciliation | `source_order_count - SUM(order_count) == 0` **and** `SUM(order_count) > 0` (independently recomputed from `orders`) |
 | log row | the model's own `etl_run_log` row records `mismatch == 0` |
 | dataset loads | both dashboard tables non-empty |
-| idempotent | second run leaves dashboard row counts unchanged |
+| idempotent | second run succeeds and leaves dashboard row counts and `SUM(order_count)` unchanged |
 
 **Score = pass / fail.** Note the reconciliation rule is only satisfiable when
 each COMPLETED order is attributed to exactly one category (an order's

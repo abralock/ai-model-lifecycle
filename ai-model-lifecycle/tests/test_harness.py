@@ -110,25 +110,23 @@ def test_scorers_return_structured_result_on_empty(case_id):
     assert r.reason  # non-empty reason, no exception
 
 
-def test_r1_scorer_static_pass_and_fail():
-    from scorers.r1_scorer import score
+def test_r1_scorer_static_pass_and_fail(monkeypatch):
+    from scorers import r1_scorer
+    from tests.r1_reference import reference_output
 
-    good = (
-        "### FILE: pom.xml\n```xml\n<parent><artifactId>spring-boot-starter-parent</artifactId>"
-        "<version>3.3.4</version></parent>\n```\n"
-        "### FILE: A.java\n```java\nimport jakarta.persistence.Entity;\n```\n"
-        "### DELETE: src/main/resources/META-INF/spring.factories\n"
-    )
-    r = score(good, model_slug="t/m")
+    monkeypatch.setattr(r1_scorer, "_maven_argv", lambda project: None)  # static only
+    r = r1_scorer.score(reference_output(), model_slug="t/m")
     assert r.checks["boot3_pom"] and r.checks["javax_free"] and r.checks["factories_gone"]
 
-    bad = (
-        "### FILE: pom.xml\n```xml\n<parent><artifactId>spring-boot-starter-parent</artifactId>"
-        "<version>2.7.18</version></parent>\n```\n"
-        "### FILE: A.java\n```java\nimport javax.persistence.Entity;\n```\n"
-    )
-    r2 = score(bad, model_slug="t/m")
+    r2 = r1_scorer.score(reference_output(migrate=False), model_slug="t/m")
     assert not r2.passed and not r2.checks["boot3_pom"] and not r2.checks["javax_free"]
+
+
+def test_r1_prompt_inlines_sources():
+    prompt = build_prompt("r1_springboot2to3")
+    assert "--- ARTIFACT: pom.xml ---" in prompt
+    assert "--- ARTIFACT: src/main/java/com/example/demo/config/WebConfig.java ---" in prompt
+    assert "import javax.servlet.Filter;" in prompt
 
 
 # --------------------------------------------------------------------------- #
@@ -196,3 +194,45 @@ def test_report_renders_sample():
     assert "Raw token counts" in md
     assert "Normalized views" in md
     assert "Overall score" in md
+
+
+# --------------------------------------------------------------------------- #
+# report statistics / bookkeeping                                              #
+# --------------------------------------------------------------------------- #
+def test_wilson_and_fisher():
+    import report
+
+    lo, hi = report.wilson_ci(7, 12)
+    assert 0.31 < lo < 0.33 and 0.80 < hi < 0.82
+    assert report.wilson_ci(0, 0) == (0.0, 0.0)
+    # 11/12 vs 7/12 — the pilot gap — is not significant
+    assert abs(report.fisher_exact_p(11, 1, 7, 5) - 0.155) < 0.001
+    assert report.fisher_exact_p(12, 0, 0, 12) < 1e-5
+
+
+def test_infra_errors_excluded_and_per_case_counts():
+    import report
+
+    base = {"case_id": "r3_oracle_to_postgres", "model_slug": "m/a", "model_name": "A",
+            "role": "current", "latency_s": 2.0, "output_tokens": 10, "output_text": ""}
+    runs = [
+        dict(base, ok=True),
+        dict(base, ok=False, error="empty completion (finish_reason=length)"),
+        dict(base, ok=False, error="RateLimitError: 429"),
+    ]
+    a = report.aggregate(runs, score=False)[("m/a", "current")]
+    assert a.infra_errors == 1
+    assert a.runs == 2 and a.passes == 1          # empty completion is a model FAIL
+    assert a.case_results["r3_oracle_to_postgres"] == [1, 2]
+
+
+def test_load_runs_uses_single_date(tmp_path, monkeypatch):
+    import common
+
+    d = tmp_path / "p"
+    d.mkdir()
+    for name in ("m.c.20261008.json", "m.c.20261008.r1.json", "m.c.20261009.json"):
+        (d / name).write_text(json.dumps({"case_id": "c"}))
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    assert [r["_file"] for r in common.load_runs("p")] == ["m.c.20261009.json"]
+    assert len(common.load_runs("p", date="20261008")) == 2

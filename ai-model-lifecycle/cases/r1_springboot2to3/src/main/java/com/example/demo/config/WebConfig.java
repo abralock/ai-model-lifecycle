@@ -7,7 +7,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import javax.servlet.Filter;
-import javax.servlet.FilterRegistrationBean;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 
 /**
  * Web config. Uses javax.servlet.* (removed in Spring 6 / Boot 3) and should

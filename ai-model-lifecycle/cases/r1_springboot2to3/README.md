@@ -53,9 +53,23 @@ src/test/java/com/example/demo/
 | Check | Rule |
 |---|---|
 | compile | `mvn -q compile` exit 0 |
-| tests | `mvn -q test` exit 0 (all green) |
-| javax free | `grep -rn "javax\." src/` returns **no** matches |
+| tests | `mvn test` exit 0 (all green) |
+| tests executed | at least as many tests run as the input defines (4) — JUnit 4 tests silently run 0 times under Boot's Jupiter-only starter |
+| hidden tests | the input's own tests, migrated to JUnit 5 (`scorers/fixtures/r1_hidden_tests/`, never shown to models), pass against the model's main code |
+| javax free | no code use of `javax.{persistence,validation,annotation,servlet}` under `src/` (comments and JDK packages like `javax.sql` are fine) |
 | factories gone | no `spring.factories` under `src/main/resources` |
 | boot 3 pom | `spring-boot-starter-parent` version starts with `3.` |
 
+The model's output is applied as a patch: the input module is copied, `### DELETE:`
+paths removed, emitted files written on top. Maven runs locally if installed,
+otherwise in a `maven:3.9-eclipse-temurin-17` container. With neither, the build
+checks are **unverified and the case fails**.
+
 **Score = pass / fail** (all checks must pass).
+
+### Input fix (2026-10-09)
+
+`WebConfig.java` imported `javax.servlet.FilterRegistrationBean`, which does not
+exist (it is `org.springframework.boot.web.servlet.FilterRegistrationBean`), so
+the input never compiled and a literal javax→jakarta migration could not either.
+The import was corrected; `javax.servlet.Filter` is still there to migrate.

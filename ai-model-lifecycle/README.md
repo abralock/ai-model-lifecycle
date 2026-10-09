@@ -30,6 +30,7 @@ python runner.py --pair opus-4.8-vs-5.5 --dry-run
 # score + build the scorecard
 python report.py --pair opus-4.8-vs-5.5           # live scorers
 python report.py --pair opus-4.8-vs-5.5 --no-score # fast, uses runner ok-flag
+python report.py --pair opus-4.8-vs-5.5 --date 20261008  # score one past run date
 
 # individual scorers
 python -m scorers.r1_scorer --output-file <model-output.txt>
@@ -37,6 +38,18 @@ python -m scorers.r1_scorer --output-file <model-output.txt>
 # tests
 pytest -q
 ```
+
+## Scoring notes
+- `report.py` scores **one run date** (latest by default) so runs from different
+  prompt/scorer versions are never mixed. It reports pass rates with 95% Wilson
+  intervals, a Fisher exact p-value for the current-vs-target gap, per-case
+  passes/runs, and every failing run with its reason. Provider/API errors are
+  listed separately and excluded from quality, time and cost.
+- R1 needs Maven: local `mvn` if installed, otherwise Docker
+  (`maven:3.9-eclipse-temurin-17`, deps cached in the `aidb_m2` volume). Without
+  either, R1 build checks are unverified and the case fails.
+- R4/R5 run the model's SQL with real `psql` (local, else inside the
+  `aidb-postgres` container) in a throwaway schema per run.
 
 ## Layout (pilot)
 - `models.yaml` — candidate matrix (pair-agnostic; add pairs to scale to 7)

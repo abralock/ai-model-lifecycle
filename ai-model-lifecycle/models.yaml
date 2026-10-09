@@ -19,9 +19,9 @@ pairs:
   - id: sonnet-5-vs-5.5
     current: {id: anthropic/claude-sonnet-5,   name: "Claude Sonnet 5"}
     target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}
-#  - id: sonnet-4.6-vs-5.5
-#    current: {id: anthropic/claude-sonnet-4.6, name: "Claude Sonnet 4.6"}
-#    target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}
+  - id: sonnet-4.6-vs-5.5
+    current: {id: anthropic/claude-sonnet-4.6, name: "Claude Sonnet 4.6"}
+    target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}
 #  - id: haiku-4.5-vs-5.5
 #    current: {id: anthropic/claude-haiku-4.5,  name: "Claude Haiku 4.5"}
 #    target:  {id: anthropic/claude-haiku-5.5,  name: "Claude Haiku 5.5"}

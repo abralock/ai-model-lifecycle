@@ -39,6 +39,7 @@ from common import (
     get_openrouter_token,
     load_config,
     load_env,
+    new_run_id,
     run_path,
     save_run,
 )
@@ -78,6 +79,7 @@ class RunResult:
     temperature: float
     max_tokens: int
     rep: int = 0                    # repeat index (0-based) within one --repeats run
+    run_id: str = ""                # one id per runner invocation (see common.new_run_id)
     # --- usage ---
     input_tokens: int = 0
     output_tokens: int = 0
@@ -291,7 +293,9 @@ def run_case(
     *,
     dry_run: bool = False,
     rep: int = 0,
+    run_id: str | None = None,
 ) -> RunResult:
+    run_id = run_id or new_run_id()
     prompt = build_prompt(case_id)
     usage, attempts, latency, text, finish_reason, err = call_model(
         model.id,
@@ -310,6 +314,7 @@ def run_case(
         model_name=model.name,
         role=role,
         rep=rep,
+        run_id=run_id,
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens,
         latency_s=round(latency, 4),
@@ -322,8 +327,8 @@ def run_case(
         created_at=time.time(),
         **usage,
     )
-    path = run_path(pair_id, model.id, case_id, rep=rep)
-    save_run(asdict(result), path)
+    if not dry_run:  # a dry run's empty output must never become "the latest run"
+        save_run(asdict(result), run_path(pair_id, model.id, case_id, rep=rep, run_id=run_id))
     return result
 
 def run_pair(
@@ -333,13 +338,18 @@ def run_pair(
     case: str | None = None,
     dry_run: bool = False,
     repeats: int = 1,
+    run_id: str | None = None,
 ) -> list[RunResult]:
+    """Run every (case, model, repeat) of a pair. All files share ONE run id,
+    taken once at the start, so a run that crosses midnight UTC stays whole."""
     pair = cfg.get_pair(pair_id)
+    run_id = run_id or new_run_id()
     results: list[RunResult] = []
     for case_id in cfg.selected_cases(case):
         for model, role in ((pair.current, "current"), (pair.target, "target")):
             for rep in range(repeats):
-                res = run_case(cfg, pair_id, case_id, model, role, dry_run=dry_run, rep=rep)
+                res = run_case(cfg, pair_id, case_id, model, role, dry_run=dry_run, rep=rep,
+                               run_id=run_id)
                 status = "OK" if res.ok else f"FAIL ({res.error})"
                 tag = f" [rep {rep+1}/{repeats}]" if repeats > 1 else ""
                 print(f"[{pair_id}] {role:7s} {model.name:20s} {case_id:24s} "
@@ -373,8 +383,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         ap.error("pass --pair <id> or --all-pairs")
 
+    run_id = new_run_id()
+    print(f"run id: {run_id}", file=sys.stderr)
     for pid in pair_ids:
-        run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats)
+        run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats,
+                 run_id=run_id)
     return 0
 
 

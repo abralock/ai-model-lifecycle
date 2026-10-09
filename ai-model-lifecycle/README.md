@@ -24,13 +24,14 @@ python runner.py --pair opus-4.8-vs-5.5
 python runner.py --pair opus-4.8-vs-5.5 --case r3_oracle_to_postgres
 python runner.py --all-pairs
 
-# build prompts only, no network (CI-safe)
+# build prompts only, no network, writes no run files (CI-safe)
 python runner.py --pair opus-4.8-vs-5.5 --dry-run
 
 # score + build the scorecard
 python report.py --pair opus-4.8-vs-5.5           # live scorers
 python report.py --pair opus-4.8-vs-5.5 --no-score # fast, uses runner ok-flag
-python report.py --pair opus-4.8-vs-5.5 --date 20261008  # score one past run date
+python report.py --pair opus-4.8-vs-5.5 --list-runs              # run ids present
+python report.py --pair opus-4.8-vs-5.5 --run 20261009T143005Z   # score a past run
 
 # individual scorers
 python -m scorers.r1_scorer --output-file <model-output.txt>
@@ -40,8 +41,12 @@ pytest -q
 ```
 
 ## Scoring notes
-- `report.py` scores **one run date** (latest by default) so runs from different
-  prompt/scorer versions are never mixed. It reports pass rates with 95% Wilson
+- Each `runner.py` invocation gets one **run id** (its UTC start time, e.g.
+  `20261009T143005Z`) stamped on every file it writes. `report.py` scores **one
+  run** (the latest by default), so a re-run — even the same day, or one that
+  crosses midnight UTC — never mixes with or overwrites an earlier one. Legacy
+  date-only runs (`20261008`) keep working as run ids. `REPORT.md` only changes
+  when `report.py` is run: check its `Run:` header line. It reports pass rates with 95% Wilson
   intervals, a Fisher exact p-value for the current-vs-target gap, per-case
   passes/runs, and every failing run with its reason. Provider/API errors are
   listed separately and excluded from quality, time and cost.

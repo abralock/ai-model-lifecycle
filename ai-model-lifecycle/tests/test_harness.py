@@ -318,7 +318,7 @@ def test_run_pair_uses_one_run_id_for_every_file(tmp_path, monkeypatch):
     fake_usage = {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0,
                   "cache_write_tokens": 0, "total_tokens": 2}
     monkeypatch.setattr(runner, "call_model",
-                        lambda *a, **k: (fake_usage, 1, 0.1, "out", "stop", None))
+                        lambda *a, **k: runner.CallResult(fake_usage, 1, 0.1, "out", "stop", None))
     runner.run_pair(CONFIG, "opus-4.8-vs-5.5", repeats=2)
     files = list((tmp_path / "opus-4.8-vs-5.5").glob("*.json"))
     assert len(files) == len(CONFIG.cases) * 2 * 2

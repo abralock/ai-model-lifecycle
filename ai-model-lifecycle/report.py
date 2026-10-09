@@ -11,8 +11,10 @@ and writes runs/<pair>/REPORT.md comparing current vs target vs Δ on:
 
 Infrastructure errors (provider/API failures, as opposed to a model answer that
 fails its checks) are reported separately and excluded from quality, time and
-cost. Only one run is scored: the latest by default, or --run <run id> (a
-runner invocation's id such as 20261009T143005Z; a legacy run's id is its date).
+cost. Only one run is scored: by default the latest COMPLETE run (every
+configured case, for both models), or --run <run id> (a runner invocation's id
+such as 20261009T143005Z; a legacy run's id is its date). A newer partial run
+(e.g. `runner.py --case r4_...`) is named in the header but not scored.
 
 Normalized views (locked in per TEST_CASES.md):
   * tokens per successful task
@@ -190,8 +192,28 @@ def _delta(cur: float, tgt: float, *, higher_better: bool = True) -> str:
     return f"{sign}{pct:.1f}% {arrow}"
 
 
+def missing_cases(cfg: Config, runs: list[dict]) -> list[str]:
+    """Configured cases this run lacks for the current or the target model."""
+    have = {(r.get("case_id"), r.get("role")) for r in runs}
+    return sorted(c for c in cfg.cases if not {(c, "current"), (c, "target")} <= have)
+
+
+def pick_run(cfg: Config, pair_id: str) -> tuple[str | None, list[str]]:
+    """The latest complete run id, plus the newer partial run ids skipped for it.
+
+    No complete run at all -> the latest run (its header then flags it partial).
+    """
+    ids = list_runs(pair_id)
+    skipped: list[str] = []
+    for rid in reversed(ids):
+        if not missing_cases(cfg, load_runs(pair_id, run=rid)):
+            return rid, skipped
+        skipped.append(rid)
+    return (ids[-1] if ids else None), []
+
+
 def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg],
-                runs: list[dict], score: bool) -> str:
+                runs: list[dict], score: bool, skipped: list[str] | None = None) -> str:
     pair = cfg.get_pair(pair_id)
     cur = aggs.get((pair.current.id, "current"))
     tgt = aggs.get((pair.target.id, "target"))
@@ -203,7 +225,15 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     lines.append(f"> Target: **{pair.target.name}** (`{pair.target.id}`)  ")
     run_ids = sorted({r.get("_run") for r in runs if r.get("_run")})
     lines.append(f"> Run: {', '.join(run_ids) or '—'}  ·  runs loaded: {len(runs)}  ·  "
-                 f"live scoring: {'on' if score else 'off (--no-score)'}\n")
+                 f"live scoring: {'on' if score else 'off (--no-score)'}  ")
+    missing = missing_cases(cfg, runs) if runs else []
+    if missing:
+        lines.append(f"> ⚠️ **Partial run** — missing cases: {', '.join(missing)}. "
+                     f"Not a full Gate 1 scorecard.  ")
+    if skipped:
+        lines.append(f"> Newer partial run(s) not scored here: {', '.join(skipped)} "
+                     f"(see `report.py --run <id>`).  ")
+    lines.append("")
 
     if not cur or not tgt or not runs:
         lines.append("_No run data yet._ Populate `runs/` via "
@@ -327,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--all-pairs", action="store_true")
     ap.add_argument("--run", "--date", dest="run",
                     help="run id to score (e.g. 20261009T143005Z, or a legacy run's YYYYMMDD); "
-                         "default: the latest run")
+                         "default: the latest complete run")
     ap.add_argument("--list-runs", action="store_true", help="list the run ids per pair and exit")
     ap.add_argument("--no-score", action="store_true",
                     help="use runner ok-flag instead of live scorers (fast/offline)")
@@ -345,14 +375,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list_runs:
         for pid in pair_ids:
-            print(f"{pid}: " + (" ".join(list_runs(pid)) or "(no runs)"))
+            print(f"{pid}:")
+            for rid in list_runs(pid):
+                recs = load_runs(pid, run=rid)
+                miss = missing_cases(cfg, recs)
+                note = f"partial, missing {', '.join(miss)}" if miss else "complete"
+                print(f"  {rid}  {len(recs):3d} files  {note}")
         return 0
 
     score = not args.no_score
     for pid in pair_ids:
-        runs = load_runs(pid, run=args.run)
+        run, skipped = (args.run, []) if args.run else pick_run(cfg, pid)
+        runs = load_runs(pid, run=run) if run else []
         aggs = aggregate(runs, score=score)
-        md = render_pair(cfg, pid, aggs, runs, score)
+        md = render_pair(cfg, pid, aggs, runs, score, skipped)
         out = RUNS_DIR / pid / "REPORT.md"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(md, encoding="utf-8")

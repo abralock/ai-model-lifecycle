@@ -115,6 +115,21 @@ def test_parse_files_tolerates_bare_fence_opener():
     assert parse_files(txt) == {"x.sql": "SELECT 2;\n"}
 
 
+def test_parse_files_header_inside_fence():
+    """Regression (Opus 4.8 R4, run 20261009T015807Z): the header sits INSIDE
+    the fence, directly above the content. The body must not come back empty."""
+    txt = "```sql\n### FILE: solution.sql\nCREATE TABLE t (id int);\nSELECT 1;\n```\n"
+    assert parse_files(txt) == {"solution.sql": "CREATE TABLE t (id int);\nSELECT 1;\n"}
+
+
+def test_parse_files_header_inside_fence_then_normal_file():
+    txt = (
+        "```sql\n### FILE: a.sql\nSELECT 1;\n```\n"
+        "### FILE: b.sql\n```sql\nSELECT 2;\n```\n"
+    )
+    assert parse_files(txt) == {"a.sql": "SELECT 1;\n", "b.sql": "SELECT 2;\n"}
+
+
 def test_run_path_is_filesystem_safe():
     p = run_path("pair-x", "anthropic/claude-opus-4.8", "r1_springboot2to3", run_id="20261009T143005Z")
     assert "/" not in p.name
@@ -319,3 +334,29 @@ def test_dry_run_writes_no_run_files(tmp_path, monkeypatch):
     monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
     runner.run_pair(CONFIG, "opus-4.8-vs-5.5", dry_run=True)
     assert list(tmp_path.rglob("*.json")) == []
+
+
+def _rec(case, role):
+    return {"case_id": case, "role": role, "model_slug": f"m/{role}", "ok": True}
+
+
+def test_report_picks_latest_complete_run(tmp_path, monkeypatch):
+    """A newer partial run (e.g. --case r4 only) must not become the scorecard."""
+    import common
+    import report
+
+    d = tmp_path / "opus-4.8-vs-5.5"
+    d.mkdir()
+    for case in CONFIG.cases:
+        for role in ("current", "target"):
+            (d / f"m__{role}.{case}.20261009T014939Z.json").write_text(json.dumps(_rec(case, role)))
+    for role in ("current", "target"):
+        (d / f"m__{role}.r4_schema_load_optimize.20261009T015807Z.json").write_text(
+            json.dumps(_rec("r4_schema_load_optimize", role)))
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+
+    run, skipped = report.pick_run(CONFIG, "opus-4.8-vs-5.5")
+    assert run == "20261009T014939Z"
+    assert skipped == ["20261009T015807Z"]
+    assert report.missing_cases(CONFIG, common.load_runs("opus-4.8-vs-5.5", run="20261009T015807Z")) \
+        == sorted(set(CONFIG.cases) - {"r4_schema_load_optimize"})

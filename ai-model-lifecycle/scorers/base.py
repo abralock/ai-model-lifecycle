@@ -52,7 +52,8 @@ def parse_files(output_text: str) -> dict[str, str]:
     answer as "no SQL found":
       * a stray fence ````` before the ``### FILE:`` header,
       * a language tag on the fence (`````sql` / ````python`)
-      * ``` / `` or `---`-style blocks.
+      * ``` / `` or `---`-style blocks,
+      * the header placed INSIDE the fence, directly above the content.
 
     Algorithm: scan lines; on a ``### FILE: <path>`` header, walk forward until the
     next line that is (or starts with) a fence, then capture until the matching
@@ -78,12 +79,30 @@ def parse_files(output_text: str) -> dict[str, str]:
         return None
 
     i = 0
+    inside = False  # inside a fence opened before (outside of) any file body
     while i < n:
         m = _FILE_RE.match(lines[i])
         if not m:
+            if _fence(lines[i]):
+                inside = not inside
             i += 1
             continue
         path = m.group("path").strip().strip("`").strip()
+        # Header INSIDE an open fence, directly above the content
+        # (```sql / ### FILE: x / ...content... / ```): the body is the lines
+        # up to the closing fence. Only when there IS content before that fence;
+        # otherwise it is the stray-wrapper case handled below.
+        if inside:
+            j = i + 1
+            while j < n and not _fence(lines[j]):
+                j += 1
+            body = lines[i + 1:j]
+            if any(line.strip() for line in body):
+                files[path] = "\n".join(body) + "\n"
+                inside = False
+                i = j + 1
+                continue
+        inside = False
         # Find the opening content fence. A tagged fence (`````sql) is always the
         # opener. A bare `` ``` `` is a stray wrapper fence (models open/close an
         # empty fence around the header) and is skipped *only* when the next

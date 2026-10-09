@@ -68,6 +68,21 @@ def test_correct_translation_passes_with_parity():
 
 
 @requires_pg
+def test_commit_inside_procedure_passes():
+    """Regression (Opus 5.5, run 20261009T022349Z): the Oracle source COMMITs,
+    and Postgres allows COMMIT in a procedure when CALL runs outside an explicit
+    transaction (psql / app autocommit). The scorer must CALL that way rather
+    than fail a faithful translation with 'invalid transaction termination'."""
+    from scorers.r3_scorer import score
+
+    golden = (CASE_DIR / "golden_postgres.sql").read_text(encoding="utf-8")
+    first_end = golden.index("END;", golden.index("PROCEDURE sp_customer_tier"))
+    with_commit = golden[:first_end] + "    COMMIT;\n" + golden[first_end:]
+    r = score(_fenced("postgres/schema.sql", with_commit), model_slug="t/m")
+    assert r.passed is True, f"{r.reason} / {r.details.get('error')}"
+
+
+@requires_pg
 def test_wrong_results_fail_parity_without_missing_objects():
     """A translation that defines all objects but returns wrong data must FAIL
     on result-set mismatch (not on missing objects)."""

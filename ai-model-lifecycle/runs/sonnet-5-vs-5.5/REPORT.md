@@ -1,6 +1,6 @@
 # Gate 1 Scorecard — sonnet-5-vs-5.5
 
-> Generated: 2026-10-09T03:09:02+00:00  
+> Generated: 2026-10-09T03:15:57+00:00  
 > Current: **Claude Sonnet 5** (`anthropic/claude-sonnet-5`)  
 > Target: **Claude Sonnet 5.5** (`anthropic/claude-sonnet-5.5`)  
 > Run: 20261009T025500Z  ·  runs loaded: 24  ·  live scoring: on  

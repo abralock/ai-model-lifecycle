@@ -1,6 +1,6 @@
 # Gate 1 Scorecard — opus-4.8-vs-5.5
 
-> Generated: 2026-10-09T02:46:39+00:00  
+> Generated: 2026-10-09T03:14:57+00:00  
 > Current: **Claude Opus 4.8** (`anthropic/claude-opus-4.8`)  
 > Target: **Claude Opus 5.5** (`anthropic/claude-opus-5.5`)  
 > Run: 20261009T022349Z  ·  runs loaded: 24  ·  live scoring: on  
@@ -9,15 +9,15 @@
 
 | Metric | Current | Target | Δ |
 |---|---:|---:|---:|
-| Quality (pass rate) | 100.0% | 75.0% | -25.0% 🔴 |
-| Pass rate 95% CI (Wilson) | 76–100% | 47–91% | — |
-| Passes / scored runs | 12/12 | 9/12 | Fisher p = 0.217 |
+| Quality (pass rate) | 100.0% | 91.7% | -8.3% 🔴 |
+| Pass rate 95% CI (Wilson) | 76–100% | 65–99% | — |
+| Passes / scored runs | 12/12 | 11/12 | Fisher p = 1.000 |
 | Infra errors (excluded) | 0 | 0 | — |
 | Time (mean latency, s) | 27.48 | 44.99 | +63.7% 🔴 |
 | Cost (total USD) | $1.1340 | $1.4781 | +30.3% 🔴 |
 | Cost / run (USD) | $0.0945 | $0.1232 | +30.3% 🔴 |
 
-> ⚠️ The quality difference is **not statistically significant** (Fisher p = 0.22, n = 12 vs 12). Add cases or repeats before treating it as a real difference.
+> ⚠️ The quality difference is **not statistically significant** (Fisher p = 1.00, n = 12 vs 12). Add cases or repeats before treating it as a real difference.
 
 ## Raw token counts
 
@@ -33,16 +33,16 @@
 
 | Metric | Current | Target | Δ |
 |---|---:|---:|---:|
-| Tokens / successful task | 6,881 | 12,349 | +79.5% 🔴 |
+| Tokens / successful task | 6,881 | 10,104 | +46.8% 🔴 |
 | Cache hit-rate % | 0.0% | 0.0% | n/a |
-| Cost / successful task (USD) | $0.0945 | $0.1642 | +73.8% 🔴 |
+| Cost / successful task (USD) | $0.0945 | $0.1344 | +42.2% 🔴 |
 
 ## Per-case quality (passes / runs)
 
 | Case | Current | Target |
 |---|---|---|
 | r1_springboot2to3 | 3/3 ✅ | 3/3 ✅ |
-| r3_oracle_to_postgres | 3/3 ✅ | 1/3 ⚠️ |
+| r3_oracle_to_postgres | 3/3 ✅ | 3/3 ✅ |
 | r4_schema_load_optimize | 3/3 ✅ | 2/3 ⚠️ |
 | r5_etl_dashboard | 3/3 ✅ | 3/3 ✅ |
 
@@ -50,8 +50,6 @@
 
 | Model | Run file | Reason |
 |---|---|---|
-| Claude Opus 5.5 | `anthropic__claude-opus-5.5.r3_oracle_to_postgres.20261009T022349Z.json` | result set != golden |
-| Claude Opus 5.5 | `anthropic__claude-opus-5.5.r3_oracle_to_postgres.20261009T022349Z.r2.json` | result set != golden |
 | Claude Opus 5.5 | `anthropic__claude-opus-5.5.r4_schema_load_optimize.20261009T022349Z.json` | failed checks: script_runs, loaded, index_scan, no_seq_scan_orders, latency_ok |
 
 ### Price reference (USD / 1M tokens)
@@ -63,7 +61,7 @@
 
 ## Overall score (current = 100 baseline)
 
-- Quality component: 75.0  (w=0.5)
+- Quality component: 91.7  (w=0.5)
 - Cost component:    76.7  (w=0.3)
 - Time component:    61.1  (w=0.2)
-- **Overall: 72.7**  → target < baseline ⚠️
+- **Overall: 81.1**  → target < baseline ⚠️

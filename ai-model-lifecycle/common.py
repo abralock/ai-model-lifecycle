@@ -124,15 +124,25 @@ def load_config(path: Path | str | None = None) -> Config:
 # --------------------------------------------------------------------------- #
 # run IO                                                                       #
 # --------------------------------------------------------------------------- #
-def run_path(pair_id: str, model_slug: str, case_id: str, rep: int = 0, run_dt: str | None = None) -> Path:
+def new_run_id() -> str:
+    """A run id: the UTC start time of one runner invocation, e.g. 20261009T143005Z.
+
+    Ids sort chronologically as strings, and a legacy date-only id (20261009)
+    sorts before every new-style id of the same day.
+    """
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def run_path(pair_id: str, model_slug: str, case_id: str, rep: int = 0, run_id: str | None = None) -> Path:
     """Canonical path for a per-run JSON.
 
     The model slug contains '/' (e.g. anthropic/claude-opus-4.8); we keep the
     full slug in the filename but flatten '/' -> '__' to stay filesystem-safe.
-    Date-stamped so repeated runs are never overwritten and history is preserved.
+    Stamped with the run id of the invocation that wrote it, so a later run
+    (even on the same day) never overwrites or mixes with an earlier one.
     """
     safe_model = model_slug.replace("/", "__")
-    stamp = run_dt or datetime.now(timezone.utc).strftime("%Y%m%d")
+    stamp = run_id or new_run_id()
     if rep > 0:
         return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.{stamp}.r{rep}.json"
     return RUNS_DIR / pair_id / f"{safe_model}.{case_id}.{stamp}.json"
@@ -144,36 +154,49 @@ def save_run(record: dict[str, Any], path: Path) -> None:
         json.dump(record, fh, indent=2, ensure_ascii=False)
 
 
-def run_date(filename: str) -> str | None:
-    """The YYYYMMDD stamp in a run filename (see run_path), or None."""
-    m = re.search(r"\.(\d{8})(?:\.r\d+)?\.json$", filename)
+def run_id_of(filename: str) -> str | None:
+    """The run id in a run filename (see run_path), or None.
+
+    Matches new ids (20261009T143005Z) and legacy date-only ids (20261009).
+    """
+    m = re.search(r"\.(\d{8}(?:T\d{6}Z)?)(?:\.r\d+)?\.json$", filename)
     return m.group(1) if m else None
 
 
-def load_runs(pair_id: str, date: str | None = None) -> list[dict[str, Any]]:
-    """Load the per-run JSONs for a pair. Missing dir -> empty list.
+def list_runs(pair_id: str) -> list[str]:
+    """Every run id present for a pair, oldest first."""
+    d = RUNS_DIR / pair_id
+    if not d.is_dir():
+        return []
+    return sorted({rid for f in d.glob("*.json") if (rid := run_id_of(f.name))})
 
-    Only one run date is loaded — `date` (YYYYMMDD) or, by default, the most
-    recent one present — so runs made under different prompts/scorers on
-    different days are never silently mixed into one scorecard. Each record
-    gets `_file` (its filename) and `_date`.
+
+def load_runs(pair_id: str, run: str | None = None) -> list[dict[str, Any]]:
+    """Load the per-run JSONs of ONE run for a pair. Missing dir -> empty list.
+
+    `run` is a run id (see new_run_id; a legacy run's id is its YYYYMMDD date);
+    by default the most recent run. Runs made under different prompts/scorers
+    are never silently mixed into one scorecard. Each record gets `_file` (its
+    filename) and `_run`.
     """
     d = RUNS_DIR / pair_id
     if not d.is_dir():
         return []
-    files = sorted(f for f in d.glob("*.json") if run_date(f.name))
-    if date is None and files:
-        date = max(run_date(f.name) for f in files)
+    if run is None:
+        runs = list_runs(pair_id)
+        if not runs:
+            return []
+        run = runs[-1]
     out: list[dict[str, Any]] = []
-    for f in files:
-        if run_date(f.name) != date:
+    for f in sorted(d.glob("*.json")):
+        if run_id_of(f.name) != run:
             continue
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 rec = json.load(fh)
         except (json.JSONDecodeError, OSError):
             continue
-        rec["_file"], rec["_date"] = f.name, date
+        rec["_file"], rec["_run"] = f.name, run
         out.append(rec)
     return out
 

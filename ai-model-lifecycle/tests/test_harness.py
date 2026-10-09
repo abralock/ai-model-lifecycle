@@ -116,9 +116,19 @@ def test_parse_files_tolerates_bare_fence_opener():
 
 
 def test_run_path_is_filesystem_safe():
-    p = run_path("pair-x", "anthropic/claude-opus-4.8", "r1_springboot2to3", run_dt="20261009")
+    p = run_path("pair-x", "anthropic/claude-opus-4.8", "r1_springboot2to3", run_id="20261009T143005Z")
     assert "/" not in p.name
-    assert p.name == "anthropic__claude-opus-4.8.r1_springboot2to3.20261009.json"
+    assert p.name == "anthropic__claude-opus-4.8.r1_springboot2to3.20261009T143005Z.json"
+    p2 = run_path("pair-x", "a/b", "c", rep=2, run_id="20261009T143005Z")
+    assert p2.name == "a__b.c.20261009T143005Z.r2.json"
+
+
+def test_new_run_id_is_utc_timestamp():
+    import re
+
+    from common import new_run_id
+
+    assert re.fullmatch(r"\d{8}T\d{6}Z", new_run_id())
 
 
 # --------------------------------------------------------------------------- #
@@ -250,13 +260,62 @@ def test_infra_errors_excluded_and_per_case_counts():
     assert a.case_results["r3_oracle_to_postgres"] == [1, 2]
 
 
-def test_load_runs_uses_single_date(tmp_path, monkeypatch):
+def _write_runs(d, names):
+    d.mkdir(exist_ok=True)
+    for name in names:
+        (d / name).write_text(json.dumps({"case_id": "c"}))
+
+
+def test_load_runs_uses_latest_run_only(tmp_path, monkeypatch):
     import common
 
-    d = tmp_path / "p"
-    d.mkdir()
-    for name in ("m.c.20261008.json", "m.c.20261008.r1.json", "m.c.20261009.json"):
-        (d / name).write_text(json.dumps({"case_id": "c"}))
+    _write_runs(tmp_path / "p", [
+        "m.c.20261008.json", "m.c.20261008.r1.json",                # legacy date-only run
+        "m.c.20261009T080000Z.json", "m.c.20261009T080000Z.r1.json", "m.c.20261009T080000Z.r2.json",
+        "m.c.20261009T150000Z.json",                                # later run, same day, 1 repeat
+    ])
     monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
-    assert [r["_file"] for r in common.load_runs("p")] == ["m.c.20261009.json"]
-    assert len(common.load_runs("p", date="20261008")) == 2
+    latest = common.load_runs("p")
+    # the morning run's .r1/.r2 must NOT be mixed into the afternoon run
+    assert [r["_file"] for r in latest] == ["m.c.20261009T150000Z.json"]
+    assert latest[0]["_run"] == "20261009T150000Z"
+    assert len(common.load_runs("p", run="20261009T080000Z")) == 3
+    assert len(common.load_runs("p", run="20261008")) == 2          # legacy runs still loadable
+    assert common.list_runs("p") == ["20261008", "20261009T080000Z", "20261009T150000Z"]
+
+
+def test_new_run_beats_legacy_run_of_same_day(tmp_path, monkeypatch):
+    import common
+
+    _write_runs(tmp_path / "p", ["m.c.20261009.json", "m.c.20261009T000001Z.json"])
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    assert [r["_file"] for r in common.load_runs("p")] == ["m.c.20261009T000001Z.json"]
+
+
+def test_run_pair_uses_one_run_id_for_every_file(tmp_path, monkeypatch):
+    """All files of one invocation share one run id, even across midnight UTC."""
+    import common
+    import runner
+
+    ids = iter(["20261009T235959Z", "20261010T000001Z"])
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "new_run_id", lambda: next(ids))
+    fake_usage = {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0,
+                  "cache_write_tokens": 0, "total_tokens": 2}
+    monkeypatch.setattr(runner, "call_model",
+                        lambda *a, **k: (fake_usage, 1, 0.1, "out", "stop", None))
+    runner.run_pair(CONFIG, "opus-4.8-vs-5.5", repeats=2)
+    files = list((tmp_path / "opus-4.8-vs-5.5").glob("*.json"))
+    assert len(files) == len(CONFIG.cases) * 2 * 2
+    assert {common.run_id_of(f.name) for f in files} == {"20261009T235959Z"}
+    recs = [json.loads(f.read_text()) for f in files]
+    assert {r["run_id"] for r in recs} == {"20261009T235959Z"}
+
+
+def test_dry_run_writes_no_run_files(tmp_path, monkeypatch):
+    import common
+    import runner
+
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    runner.run_pair(CONFIG, "opus-4.8-vs-5.5", dry_run=True)
+    assert list(tmp_path.rglob("*.json")) == []

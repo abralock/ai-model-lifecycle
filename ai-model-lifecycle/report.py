@@ -11,7 +11,8 @@ and writes runs/<pair>/REPORT.md comparing current vs target vs Δ on:
 
 Infrastructure errors (provider/API failures, as opposed to a model answer that
 fails its checks) are reported separately and excluded from quality, time and
-cost. Only one run date is scored (latest by default, or --date YYYYMMDD).
+cost. Only one run is scored: the latest by default, or --run <run id> (a
+runner invocation's id such as 20261009T143005Z; a legacy run's id is its date).
 
 Normalized views (locked in per TEST_CASES.md):
   * tokens per successful task
@@ -24,7 +25,8 @@ Usage:
     python report.py --pair opus-4.8-vs-5.5
     python report.py --all-pairs
     python report.py --pair opus-4.8-vs-5.5 --no-score   # skip live scorers (fast)
-    python report.py --pair opus-4.8-vs-5.5 --date 20261008
+    python report.py --pair opus-4.8-vs-5.5 --run 20261009T143005Z
+    python report.py --pair opus-4.8-vs-5.5 --list-runs
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from common import RUNS_DIR, Config, load_config, load_env, load_runs
+from common import RUNS_DIR, Config, list_runs, load_config, load_env, load_runs
 from pricing import cost_usd, get_price
 from scorers.dispatch import score_case
 
@@ -199,8 +201,8 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     lines.append(f"> Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}  ")
     lines.append(f"> Current: **{pair.current.name}** (`{pair.current.id}`)  ")
     lines.append(f"> Target: **{pair.target.name}** (`{pair.target.id}`)  ")
-    dates = sorted({r.get("_date") for r in runs if r.get("_date")})
-    lines.append(f"> Run date: {', '.join(dates) or '—'}  ·  runs loaded: {len(runs)}  ·  "
+    run_ids = sorted({r.get("_run") for r in runs if r.get("_run")})
+    lines.append(f"> Run: {', '.join(run_ids) or '—'}  ·  runs loaded: {len(runs)}  ·  "
                  f"live scoring: {'on' if score else 'off (--no-score)'}\n")
 
     if not cur or not tgt or not runs:
@@ -323,7 +325,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Gate 1 scorecard generator")
     ap.add_argument("--pair", help="pair id (e.g. opus-4.8-vs-5.5)")
     ap.add_argument("--all-pairs", action="store_true")
-    ap.add_argument("--date", help="run date to score (YYYYMMDD); default: latest present")
+    ap.add_argument("--run", "--date", dest="run",
+                    help="run id to score (e.g. 20261009T143005Z, or a legacy run's YYYYMMDD); "
+                         "default: the latest run")
+    ap.add_argument("--list-runs", action="store_true", help="list the run ids per pair and exit")
     ap.add_argument("--no-score", action="store_true",
                     help="use runner ok-flag instead of live scorers (fast/offline)")
     args = ap.parse_args(argv)
@@ -338,9 +343,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         pair_ids = [p.id for p in cfg.pairs]
 
+    if args.list_runs:
+        for pid in pair_ids:
+            print(f"{pid}: " + (" ".join(list_runs(pid)) or "(no runs)"))
+        return 0
+
     score = not args.no_score
     for pid in pair_ids:
-        runs = load_runs(pid, date=args.date)
+        runs = load_runs(pid, run=args.run)
         aggs = aggregate(runs, score=score)
         md = render_pair(cfg, pid, aggs, runs, score)
         out = RUNS_DIR / pid / "REPORT.md"

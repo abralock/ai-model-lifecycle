@@ -1,45 +1,50 @@
 # Gate 1 Scorecard — opus-4.8-vs-5.5
 
-> Generated: 2026-10-08T16:40:58+00:00  
+> Generated: 2026-10-09T01:12:38+00:00  
 > Current: **Claude Opus 4.8** (`anthropic/claude-opus-4.8`)  
 > Target: **Claude Opus 5.5** (`anthropic/claude-opus-5.5`)  
-> Runs loaded: 24  ·  live scoring: on
+> Run date: 20261009  ·  runs loaded: 8  ·  live scoring: on
 
 ## Summary — Current vs Target
 
 | Metric | Current | Target | Δ |
 |---|---:|---:|---:|
-| Quality (pass rate) | 91.7% | 58.3% | -36.4% 🔴 |
-| Passes / runs | 11/12 | 7/12 | — |
-| Time (mean latency, s) | 26.38 | 39.61 | +50.2% 🔴 |
-| Cost (total USD) | $0.9780 | $1.1765 | +20.3% 🔴 |
+| Quality (pass rate) | 100.0% | 100.0% | +0.0% 🟢 |
+| Pass rate 95% CI (Wilson) | 51–100% | 51–100% | — |
+| Passes / scored runs | 4/4 | 4/4 | Fisher p = 1.000 |
+| Infra errors (excluded) | 0 | 0 | — |
+| Time (mean latency, s) | 27.40 | 38.61 | +40.9% 🔴 |
+| Cost (total USD) | $0.3752 | $0.4383 | +16.8% 🔴 |
+| Cost / run (USD) | $0.0938 | $0.1096 | +16.8% 🔴 |
+
+> ⚠️ The quality difference is **not statistically significant** (Fisher p = 1.00, n = 4 vs 4). Add cases or repeats before treating it as a real difference.
 
 ## Raw token counts
 
 | Bucket | Current | Target | Δ |
 |---|---:|---:|---:|
-| input tokens | 27,753 | 27,777 | +0.1% 🔴 |
-| output tokens | 33,569 | 53,269 | +58.7% 🔴 |
+| input tokens | 15,467 | 15,475 | +0.1% 🔴 |
+| output tokens | 11,916 | 18,820 | +57.9% 🔴 |
 | cache-read tokens | 0 | 0 | n/a |
 | cache-write tokens | 0 | 0 | n/a |
-| **total token spend** | 61,322 | 81,046 | +32.2% 🔴 |
+| **total token spend** | 27,383 | 34,295 | +25.2% 🔴 |
 
 ## Normalized views
 
 | Metric | Current | Target | Δ |
 |---|---:|---:|---:|
-| Tokens / successful task | 5,575 | 11,578 | +107.7% 🔴 |
+| Tokens / successful task | 6,846 | 8,574 | +25.2% 🔴 |
 | Cache hit-rate % | 0.0% | 0.0% | n/a |
-| Cost / successful task (USD) | $0.0889 | $0.1681 | +89.0% 🔴 |
+| Cost / successful task (USD) | $0.0938 | $0.1096 | +16.8% 🔴 |
 
-## Per-case quality
+## Per-case quality (passes / runs)
 
 | Case | Current | Target |
 |---|---|---|
-| r1_springboot2to3 | PASS | FAIL |
-| r3_oracle_to_postgres | PASS | PASS |
-| r4_schema_load_optimize | FAIL | FAIL |
-| r5_etl_dashboard | PASS | PASS |
+| r1_springboot2to3 | 1/1 ✅ | 1/1 ✅ |
+| r3_oracle_to_postgres | 1/1 ✅ | 1/1 ✅ |
+| r4_schema_load_optimize | 1/1 ✅ | 1/1 ✅ |
+| r5_etl_dashboard | 1/1 ✅ | 1/1 ✅ |
 
 ### Price reference (USD / 1M tokens)
 
@@ -50,7 +55,7 @@
 
 ## Overall score (current = 100 baseline)
 
-- Quality component: 63.6  (w=0.5)
-- Cost component:    52.9  (w=0.3)
-- Time component:    66.6  (w=0.2)
-- **Overall: 61.0**  → target < baseline ⚠️
+- Quality component: 100.0  (w=0.5)
+- Cost component:    85.6  (w=0.3)
+- Time component:    71.0  (w=0.2)
+- **Overall: 89.9**  → target < baseline ⚠️

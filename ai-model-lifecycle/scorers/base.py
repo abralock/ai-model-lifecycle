@@ -38,9 +38,8 @@ class ScoreResult:
 # parsing the model's `### FILE: path` fenced-block output                     #
 # --------------------------------------------------------------------------- #
 _FILE_RE = re.compile(
-    r"^#{1,4}\s*FILE:\s*(?P<path>.+?)\s*$"      # header line
-    r"\s*\n```[^\n]*\n(?P<body>.*?)```",        # fenced body (non-greedy)
-    re.DOTALL | re.MULTILINE,
+    r"^#{1,4}\s*FILE:\s*(?P<path>.+?)\s*$",        # header line
+    re.MULTILINE,
 )
 _DELETE_RE = re.compile(r"^#{1,4}\s*DELETE:\s*(?P<path>.+?)\s*$", re.MULTILINE)
 
@@ -48,12 +47,79 @@ _DELETE_RE = re.compile(r"^#{1,4}\s*DELETE:\s*(?P<path>.+?)\s*$", re.MULTILINE)
 def parse_files(output_text: str) -> dict[str, str]:
     """Extract {relative_path: content} from a `### FILE:` fenced-block output.
 
-    Tolerant: if no FILE blocks are found, returns {} (caller decides fail).
+    Line-oriented (not one big regex) so it is robust to the following real-world
+    model quirks, any of which used to yield an empty body and score a correct
+    answer as "no SQL found":
+      * a stray fence ````` before the ``### FILE:`` header,
+      * a language tag on the fence (`````sql` / ````python`)
+      * ``` / `` or `---`-style blocks.
+
+    Algorithm: scan lines; on a ``### FILE: <path>`` header, walk forward until the
+    next line that is (or starts with) a fence, then capture until the matching
+    closing fence. Tolerant: if no FILE blocks are found, returns {}.
     """
+    text = output_text or ""
     files: dict[str, str] = {}
-    for m in _FILE_RE.finditer(output_text or ""):
+    lines = text.splitlines()
+    n = len(lines)
+
+    def _fence(line: str) -> str | None:
+        """Return the fence marker ('```' or '~~~') if `line` is a fence, else None.
+
+        A fence is any line whose stripped form starts with ``` or ~~~. A *bare*
+        fence (marker with no trailing language tag) is distinguishable from a
+        tagged fence (`````sql`) so stray wrapper fences around the header can be
+        skipped without eating the real content fence.
+        """
+        s = line.strip()
+        for marker in ("```", "~~~"):
+            if s.startswith(marker):
+                return marker
+        return None
+
+    i = 0
+    while i < n:
+        m = _FILE_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
         path = m.group("path").strip().strip("`").strip()
-        files[path] = m.group("body")
+        # Find the opening content fence. A tagged fence (`````sql) is always the
+        # opener. A bare `` ``` `` is a stray wrapper fence (models open/close an
+        # empty fence around the header) and is skipped *only* when the next
+        # non-blank line is another fence (the real opener or closer).
+        open_idx = None
+        j = i + 1
+        while j < n:
+            f = _fence(lines[j])
+            if f is None:
+                j += 1
+                continue
+            # tagged fence -> definite opener
+            if len(lines[j].strip()) > len(f):
+                open_idx = j
+                break
+            # bare fence: skip only if the next non-blank line is also a fence
+            k = j + 1
+            while k < n and not lines[k].strip():
+                k += 1
+            if k < n and _fence(lines[k]) is not None:
+                j = k
+                continue
+            # next non-blank line is real content -> this bare fence is the opener
+            open_idx = j
+            break
+        if open_idx is None:
+            i += 1
+            continue
+        # Capture body from the line after the opener until the closing fence.
+        body: list[str] = []
+        j = open_idx + 1
+        while j < n and not _fence(lines[j]):
+            body.append(lines[j])
+            j += 1
+        files[path] = "\n".join(body) + ("\n" if body else "")
+        i = j + 1
     return files
 
 

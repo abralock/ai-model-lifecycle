@@ -25,6 +25,9 @@ pairs:
   - id: haiku-4.5-vs-5.5
     current: {id: anthropic/claude-haiku-4.5,  name: "Claude Haiku 4.5"}
     target:  {id: anthropic/claude-haiku-5.5,  name: "Claude Haiku 5.5"}
+#  (Before enabling a GPT pair, check which providers serve BOTH its models
+#   (the /endpoints URL in `defaults.provider` below); if Amazon Bedrock
+#   doesn't, set one per pair, e.g. provider: {order: ["OpenAI"], allow_fallbacks: false})
 #  - id: gpt-5.6-sol-vs-6-sol
 #    current: {id: openai/gpt-5.6-sol,   name: "GPT-5.6 Sol"}
 #    target:  {id: openai/gpt-6-sol,     name: "GPT-6 Sol"}
@@ -37,6 +40,16 @@ pairs:
 
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:
+  # OpenRouter provider routing, sent on every call. Pin ONE provider with
+  # fallbacks off so both models of a pair run on the same infrastructure;
+  # otherwise OpenRouter picks per request and the Time axis measures provider
+  # speed. Amazon Bedrock serves all 7 Claude models (checked 2026-10-09 via
+  # https://openrouter.ai/api/v1/models/<model>/endpoints). Override per pair
+  # with `provider: {...}` (e.g. GPT pairs), or `provider: null` to let
+  # OpenRouter route freely.
+  provider:
+    order: ["Amazon Bedrock"]
+    allow_fallbacks: false
   temperature: 0
   max_tokens: 32000
   timeout_s: 600

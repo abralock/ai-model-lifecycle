@@ -45,6 +45,19 @@ from scorers.dispatch import score_case
 # Weights from GATE1_BUILD_PLAN.md §7 (Quality 0.5 / Cost 0.3 / Time 0.2).
 W_QUALITY, W_COST, W_TIME = 0.5, 0.3, 0.2
 
+# Cost and time components are ratios (current / target x 100) and unbounded:
+# a target 4x cheaper would score 400 on cost and outweigh a quality drop.
+# Clamp them so efficiency can move the overall score by at most
+# W_COST*50 + W_TIME*50 = 25 points either way.
+COMPONENT_MIN, COMPONENT_MAX = 50.0, 150.0
+
+
+def component(cur: float, tgt: float) -> float:
+    """Lower-is-better metric as a 0..150 score, current = 100, clamped."""
+    if not cur or not tgt:
+        return 100.0
+    return max(COMPONENT_MIN, min(COMPONENT_MAX, cur / tgt * 100.0))
+
 
 # --------------------------------------------------------------------------- #
 # aggregation                                                                  #
@@ -63,6 +76,8 @@ class ModelAgg:
     cache_write: int = 0
     total_tokens: int = 0
     cost_usd: float = 0.0
+    billed_runs: int = 0            # runs whose cost is OpenRouter's billed cost
+    providers: dict[str, int] = field(default_factory=dict)  # provider -> runs
     latency_sum: float = 0.0
     case_results: dict[str, list[int]] = field(default_factory=dict)  # case -> [passes, runs]
     failures: list[tuple[str, str]] = field(default_factory=list)      # (file, reason)
@@ -151,13 +166,21 @@ def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
         a.cache_write += int(rec.get("cache_write_tokens", 0) or 0)
         a.total_tokens += int(rec.get("total_tokens", 0) or 0)
         a.latency_sum += float(rec.get("latency_s", 0.0) or 0.0)
-        a.cost_usd += cost_usd(
-            slug,
-            int(rec.get("input_tokens", 0) or 0),
-            int(rec.get("output_tokens", 0) or 0),
-            int(rec.get("cache_read_tokens", 0) or 0),
-            int(rec.get("cache_write_tokens", 0) or 0),
-        )
+        # cost: what OpenRouter billed when recorded, else the price table
+        billed = rec.get("billed_cost_usd")
+        if isinstance(billed, (int, float)):
+            a.cost_usd += float(billed)
+            a.billed_runs += 1
+        else:
+            a.cost_usd += cost_usd(
+                slug,
+                int(rec.get("input_tokens", 0) or 0),
+                int(rec.get("output_tokens", 0) or 0),
+                int(rec.get("cache_read_tokens", 0) or 0),
+                int(rec.get("cache_write_tokens", 0) or 0),
+            )
+        prov = rec.get("provider") or "not recorded"
+        a.providers[prov] = a.providers.get(prov, 0) + 1
 
         # quality
         passed, reason = bool(rec.get("ok", False)), rec.get("error") or "runner not ok"
@@ -212,6 +235,18 @@ def pick_run(cfg: Config, pair_id: str) -> tuple[str | None, list[str]]:
     return (ids[-1] if ids else None), []
 
 
+def _providers(a: ModelAgg) -> str:
+    return ", ".join(f"{p} ×{n}" for p, n in sorted(a.providers.items())) or "—"
+
+
+def _cost_source(a: ModelAgg) -> str:
+    if a.runs and a.billed_runs == a.runs:
+        return f"billed by OpenRouter ({a.billed_runs}/{a.runs})"
+    if a.billed_runs:
+        return f"billed {a.billed_runs}/{a.runs}, rest price table"
+    return "price table (pricing.py)"
+
+
 def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg],
                 runs: list[dict], score: bool, skipped: list[str] | None = None) -> str:
     pair = cfg.get_pair(pair_id)
@@ -255,6 +290,8 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     lines.append(f"| Passes / scored runs | {cur.passes}/{cur.runs} | {tgt.passes}/{tgt.runs} | "
                  f"Fisher p = {p_val:.3f} |")
     lines.append(f"| Infra errors (excluded) | {cur.infra_errors} | {tgt.infra_errors} | — |")
+    lines.append(f"| Provider (runs) | {_providers(cur)} | {_providers(tgt)} | — |")
+    lines.append(f"| Cost source | {_cost_source(cur)} | {_cost_source(tgt)} | — |")
     lines.append(f"| Time (mean latency, s) | {cur.mean_latency:.2f} | {tgt.mean_latency:.2f} | "
                  f"{_delta(cur.mean_latency, tgt.mean_latency, higher_better=False)} |")
     lines.append(f"| Cost (total USD) | ${cur.cost_usd:.4f} | ${tgt.cost_usd:.4f} | "
@@ -262,6 +299,13 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     lines.append(f"| Cost / run (USD) | ${cur.mean_cost:.4f} | ${tgt.mean_cost:.4f} | "
                  f"{_delta(cur.mean_cost, tgt.mean_cost, higher_better=False)} |")
     lines.append("")
+    if set(cur.providers) != set(tgt.providers) or len(cur.providers) > 1 or len(tgt.providers) > 1:
+        lines.append("> ⚠️ Current and target ran on **different providers** (or a mix). The Time "
+                     "comparison partly measures provider speed, not model speed. Pin one provider "
+                     "in `models.yaml` (`defaults.provider`) and re-run.\n")
+    if cur.billed_runs < cur.runs or tgt.billed_runs < tgt.runs:
+        lines.append("> Cost uses the `pricing.py` table for runs without an OpenRouter billed "
+                     "cost (runs made before billed cost was recorded). Table prices may be out of date.\n")
     if p_val >= 0.05:
         lines.append(f"> ⚠️ The quality difference is **not statistically significant** "
                      f"(Fisher p = {p_val:.2f}, n = {cur.runs} vs {tgt.runs}). Add cases or "
@@ -322,7 +366,7 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
 
     # ---- price reference --------------------------------------------------- #
     pc, pt = get_price(pair.current.id), get_price(pair.target.id)
-    lines.append("### Price reference (USD / 1M tokens)\n")
+    lines.append("### Price reference (USD / 1M tokens, `pricing.py`; used only when no billed cost)\n")
     lines.append("| Model | input | output | cache-read | cache-write |")
     lines.append("|---|---:|---:|---:|---:|")
     lines.append(f"| {pair.current.name} | {pc.input} | {pc.output} | {pc.cache_read} | {pc.cache_write} |")
@@ -334,15 +378,24 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
         q = (tgt.pass_rate / cur.pass_rate * 100.0) if cur.pass_rate else 100.0
         # cost per run, not per success: quality is already weighted above, so
         # dividing by passes would penalise a failure twice
-        c = (cur.mean_cost / tgt.mean_cost * 100.0) if tgt.mean_cost else 100.0
-        t = (cur.mean_latency / tgt.mean_latency * 100.0) if tgt.mean_latency else 100.0
+        c = component(cur.mean_cost, tgt.mean_cost)
+        t = component(cur.mean_latency, tgt.mean_latency)
         overall = W_QUALITY * q + W_COST * c + W_TIME * t
+        lower_quality = tgt.pass_rate < cur.pass_rate
+        if overall >= 100 and not lower_quality:
+            verdict = "target ≥ baseline ✅"
+        elif lower_quality:
+            verdict = ("target < baseline ⚠️ (lower pass rate than current: "
+                       "cheaper or faster does not make up for it)")
+        else:
+            verdict = "target < baseline ⚠️"
         lines.append("## Overall score (current = 100 baseline)\n")
         lines.append(f"- Quality component: {q:.1f}  (w={W_QUALITY})")
-        lines.append(f"- Cost component:    {c:.1f}  (w={W_COST})")
-        lines.append(f"- Time component:    {t:.1f}  (w={W_TIME})")
-        lines.append(f"- **Overall: {overall:.1f}**  → "
-                     f"{'target ≥ baseline ✅' if overall >= 100 else 'target < baseline ⚠️'}")
+        lines.append(f"- Cost component:    {c:.1f}  (w={W_COST}, clamped to "
+                     f"{COMPONENT_MIN:.0f}–{COMPONENT_MAX:.0f})")
+        lines.append(f"- Time component:    {t:.1f}  (w={W_TIME}, clamped to "
+                     f"{COMPONENT_MIN:.0f}–{COMPONENT_MAX:.0f})")
+        lines.append(f"- **Overall: {overall:.1f}**  → {verdict}")
         lines.append("")
 
     return "\n".join(lines)

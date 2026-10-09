@@ -54,6 +54,11 @@ class Pair:
     id: str
     current: ModelRef
     target: ModelRef
+    # OpenRouter provider routing for this pair. `provider_set` is False when the
+    # pair doesn't mention `provider` (then defaults.provider applies); an
+    # explicit `provider: null` turns pinning off for the pair.
+    provider: dict[str, Any] | None = None
+    provider_set: bool = False
 
 
 @dataclass
@@ -81,6 +86,17 @@ class Config:
     @property
     def backoff_base_s(self) -> float:
         return float(self.defaults.get("backoff_base_s", 2))
+
+    def provider_for(self, pair_id: str) -> dict[str, Any] | None:
+        """OpenRouter provider preferences for a pair (sent on every call).
+
+        Both models of a pair should be served by the SAME provider, or the
+        Time axis measures provider speed instead of model speed.
+        """
+        pair = self.get_pair(pair_id)
+        if pair.provider_set:
+            return pair.provider
+        return self.defaults.get("provider")
 
     def get_pair(self, pair_id: str) -> Pair:
         for p in self.pairs:
@@ -112,6 +128,8 @@ def load_config(path: Path | str | None = None) -> Config:
                 id=entry["id"],
                 current=ModelRef(**entry["current"]),
                 target=ModelRef(**entry["target"]),
+                provider=entry.get("provider"),
+                provider_set="provider" in entry,
             )
         )
     return Config(

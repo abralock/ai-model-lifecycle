@@ -11,6 +11,10 @@ report can price cache reads/writes correctly:
 Source: OpenRouter model catalog (see OPENROUTER_REFERENCE.md). These are the
 *base* slugs used by the harness (no :batch / -pro variants).
 
+Runs made since billed-cost recording use OpenRouter's billed cost
+(`billed_cost_usd` in each run file) instead; this table is the fallback for
+older runs and for offline tests.
+
 Keep this table tiny and explicit — it is deliberately not fetched at runtime so
 scoring/reporting stays deterministic and offline-testable. Add a row per new
 model when extending the matrix.
@@ -46,12 +50,18 @@ class Price:
 PRICES: dict[str, Price] = {
     "anthropic/claude-opus-4.8": Price(input=5.0, output=25.0, cache_read=0.25, cache_write=6.25),
     "anthropic/claude-opus-5.5": Price(input=4.0, output=20.0, cache_read=0.20, cache_write=5.00),
-    # --- placeholders for the remaining matrix (adjust when enabled) ---
-    "anthropic/claude-sonnet-5": Price(input=3.0, output=15.0, cache_read=0.30, cache_write=3.75),
-    "anthropic/claude-sonnet-5.5": Price(input=3.0, output=15.0, cache_read=0.30, cache_write=3.75),
+    # Claude input/output prices below: OpenRouter's base endpoint price for
+    # each model, checked 2026-10-09 via
+    # https://openrouter.ai/api/v1/models/<model>/endpoints (some providers also
+    # list a ~10% dearer endpoint). Sonnet 5/5.5 and Haiku 5.5 were previously
+    # placeholders, wrong by 1.5x and 10x. Cache buckets keep the 5% / 125%
+    # convention above.
+    "anthropic/claude-sonnet-5": Price(input=2.0, output=10.0, cache_read=0.10, cache_write=2.50),
+    "anthropic/claude-sonnet-5.5": Price(input=2.0, output=10.0, cache_read=0.10, cache_write=2.50),
     "anthropic/claude-sonnet-4.6": Price(input=3.0, output=15.0, cache_read=0.30, cache_write=3.75),
     "anthropic/claude-haiku-4.5": Price(input=1.0, output=5.0, cache_read=0.10, cache_write=1.25),
-    "anthropic/claude-haiku-5.5": Price(input=1.0, output=5.0, cache_read=0.10, cache_write=1.25),
+    "anthropic/claude-haiku-5.5": Price(input=0.10, output=0.50, cache_read=0.005, cache_write=0.125),
+    # --- placeholders for the remaining matrix (adjust when enabled) ---
     "openai/gpt-5.6-sol": Price(input=5.0, output=20.0),
     "openai/gpt-6-sol": Price(input=5.0, output=20.0),
     "openai/gpt-5.6-luna": Price(input=2.0, output=8.0),

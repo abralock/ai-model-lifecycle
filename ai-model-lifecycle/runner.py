@@ -30,7 +30,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from common import (
     Config,
@@ -86,6 +86,10 @@ class RunResult:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     total_tokens: int = 0
+    # --- provider / billing (OpenRouter) ---
+    provider_requested: dict[str, Any] | None = None   # routing prefs sent
+    provider: str | None = None                         # provider that served it
+    billed_cost_usd: float | None = None                # OpenRouter usage.cost
     # --- timing ---
     latency_s: float = 0.0
     attempts: int = 0
@@ -182,6 +186,26 @@ def _extract_usage(resp: Any) -> tuple[int, int, int, int, int]:
     return input_tokens, output_tokens, cache_read, cache_write, total
 
 
+class CallResult(NamedTuple):
+    usage: dict[str, Any]
+    attempts: int
+    latency_s: float
+    text: str
+    finish_reason: str | None
+    error: str | None
+    provider: str | None = None
+    billed_cost_usd: float | None = None
+
+
+def _extract_billed_cost(resp: Any) -> float | None:
+    """OpenRouter's billed cost for the call (usage.cost), if it reported one."""
+    usage = getattr(resp, "usage", None)
+    if usage is not None and not isinstance(usage, dict) and hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
+    cost = usage.get("cost") if isinstance(usage, dict) else getattr(usage, "cost", None)
+    return float(cost) if isinstance(cost, (int, float)) else None
+
+
 def call_model(
     model_slug: str,
     prompt: str,
@@ -192,8 +216,14 @@ def call_model(
     max_retries: int,
     backoff_base_s: float,
     dry_run: bool = False,
-) -> tuple[dict[str, Any], int, float, str, str | None, str | None]:
-    """Call one model, returning (usage, attempts, latency_s, text, finish_reason, error).
+    provider_prefs: dict[str, Any] | None = None,
+) -> CallResult:
+    """Call one model through OpenRouter and return a CallResult.
+
+    `provider_prefs` (OpenRouter provider routing, e.g. {"order": ["Amazon
+    Bedrock"], "allow_fallbacks": false}) is sent on every request so both
+    models of a pair run on the same provider. Every request also asks
+    OpenRouter to report its billed cost (usage.cost).
 
     Retries on 429 / 5xx / transient errors with exponential backoff. Never
     raises for a provider error — returns an `error` string instead so the run
@@ -203,21 +233,25 @@ def call_model(
              "cache_write_tokens": 0, "total_tokens": 0}
     if dry_run:
         # Build the payload shape without hitting the network.
-        return usage, 0, 0.0, "", None, None
+        return CallResult(usage, 0, 0.0, "", None, None)
 
     try:
         import litellm  # lazy import
     except Exception as exc:  # pragma: no cover
-        return usage, 0, 0.0, "", None, f"litellm import failed: {exc}"
+        return CallResult(usage, 0, 0.0, "", None, f"litellm import failed: {exc}")
 
     token = get_openrouter_token()
     if not token:
-        return usage, 0, 0.0, "", None, "OPENROUTER_TOKEN not set (check .env)"
+        return CallResult(usage, 0, 0.0, "", None, "OPENROUTER_TOKEN not set (check .env)")
 
     # Some frontier models are reasoning-only and accept a fixed temperature
     # (e.g. Opus 4.8/5.5 only accept temperature=1). Dropping unsupported params
     # lets litellm fall back to each model's default rather than hard-failing.
     litellm.drop_params = True
+
+    extra_body: dict[str, Any] = {"usage": {"include": True}}
+    if provider_prefs:
+        extra_body["provider"] = provider_prefs
 
     last_err: str | None = None
     for attempt in range(1, max_retries + 1):
@@ -237,6 +271,7 @@ def call_model(
                 max_tokens=max_tokens,
                 timeout=timeout_s,
                 api_key=token,
+                extra_body=extra_body,
             )
             latency = time.time() - t0
             i, o, cr, cw, tot = _extract_usage(resp)
@@ -259,7 +294,12 @@ def call_model(
                 if reasoning:
                     text = reasoning if isinstance(reasoning, str) else str(reasoning)
             finish_reason = getattr(resp.choices[0], "finish_reason", None)
-            return usage, attempt, latency, text, finish_reason, (None if text else f"empty completion (finish_reason={finish_reason})")
+            return CallResult(
+                usage, attempt, latency, text, finish_reason,
+                None if text else f"empty completion (finish_reason={finish_reason})",
+                provider=getattr(resp, "provider", None),
+                billed_cost_usd=_extract_billed_cost(resp),
+            )
 
         except Exception as exc:  # noqa: BLE001 - we intentionally catch all
             last_err = f"{type(exc).__name__}: {exc}"
@@ -278,7 +318,7 @@ def call_model(
             sleep_s = float(retry_after) if retry_after else backoff_base_s * (2 ** (attempt - 1))
             time.sleep(min(sleep_s, 60.0))
 
-    return usage, max_retries, 0.0, "", None, last_err
+    return CallResult(usage, max_retries, 0.0, "", None, last_err)
 
 
 # --------------------------------------------------------------------------- #
@@ -297,7 +337,8 @@ def run_case(
 ) -> RunResult:
     run_id = run_id or new_run_id()
     prompt = build_prompt(case_id)
-    usage, attempts, latency, text, finish_reason, err = call_model(
+    provider_prefs = cfg.provider_for(pair_id)
+    call = call_model(
         model.id,
         prompt,
         temperature=cfg.temperature,
@@ -306,7 +347,9 @@ def run_case(
         max_retries=cfg.max_retries,
         backoff_base_s=cfg.backoff_base_s,
         dry_run=dry_run,
+        provider_prefs=provider_prefs,
     )
+    usage, attempts, latency, text, finish_reason, err = call[:6]
     result = RunResult(
         pair_id=pair_id,
         case_id=case_id,
@@ -325,6 +368,9 @@ def run_case(
         ok=err is None,
         error=err,
         created_at=time.time(),
+        provider_requested=provider_prefs,
+        provider=call.provider,
+        billed_cost_usd=call.billed_cost_usd,
         **usage,
     )
     if not dry_run:  # a dry run's empty output must never become "the latest run"

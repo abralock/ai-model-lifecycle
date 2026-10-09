@@ -103,7 +103,7 @@ docker compose -f docker/docker-compose.yml up -d
 pytest -q
 ```
 
-Expected: **`63 passed`** (the number may grow) and **nothing skipped**.
+Expected: **`73 passed`** (the number may grow) and **nothing skipped**.
 
 | You see | Meaning | Fix |
 |---|---|---|
@@ -171,6 +171,11 @@ Open `runs/<pair>/REPORT.md`. Check the top first:
 - **`runs loaded: 24`** for a full pair (4 tasks × 2 models × 3 repeats).
 - **No "Partial run" warning.**
 - **`Infra errors (excluded)` is 0.** If not, some API calls failed; re-run.
+- **`Provider (runs)` shows the same provider for both models**, e.g.
+  `Amazon Bedrock ×12` in both columns, with no "different providers" warning.
+  Otherwise speed and cost compare two providers, not two models.
+- **`Cost source` says `billed by OpenRouter (12/12)`.** If it mentions the
+  price table, those runs have no billed cost and their cost is an estimate.
 
 ---
 
@@ -182,11 +187,15 @@ Open `runs/<pair>/REPORT.md`. Check the top first:
 | **Fisher p** | Whether a quality difference is real. **Below 0.05** = real; above = could be luck. |
 | **95% CI** | Likely range of the true pass rate. Wide range = not enough data. |
 | **Time / Cost per run** | Speed and price per task. |
-| **Overall score** | Current model = **100**. Above 100: the new model is better overall. Below: worse. Weights: Quality 50%, Cost 30%, Time 20%. |
+| **Provider (runs)** | Which provider served each model's runs. Both models should use the same one. |
+| **Cost source** | Where the cost comes from: what OpenRouter billed (preferred) or the `pricing.py` table (fallback). |
+| **Overall score** | Current model = **100**. Above 100: the new model is better overall. Below: worse. Weights: Quality 50%, Cost 30%, Time 20%. Cost and time each count between 50 and 150, so a huge price or speed gap can't outweigh quality on its own. A new model that passes fewer tasks is never marked "target ≥ baseline". |
 | **Failing runs** | Every failure with its reason. Read these before trusting a result. |
 
-> **Cost caveat:** only the Opus prices in `pricing.py` are verified. Sonnet and
-> Haiku use placeholder prices, so treat their cost numbers as estimates.
+> **Provider and cost:** every call is pinned to one provider (Amazon Bedrock for
+> the Claude pairs, set in `models.yaml`) with fallbacks off, and the report uses
+> the cost OpenRouter actually billed. The `pricing.py` table is only a fallback
+> for runs without a billed cost.
 
 ---
 
@@ -219,15 +228,18 @@ message. Tell me whether it is a genuine model mistake or a test/harness problem
 
 ## 6. Cost and time
 
-Approximate, per pair, with `--repeats 3` (from runs on 2026-10-09):
+Approximate, per pair, with `--repeats 3` (billed by OpenRouter, runs on
+2026-10-09, all on Amazon Bedrock):
 
 | Pair | Cost | Time |
 |---|---|---|
-| `opus-4.8-vs-5.5` | ~$2.60 | 25–30 min |
-| `sonnet-5-vs-5.5` | ~$1.75 | 15–20 min |
-| `sonnet-4.6-vs-5.5` | ~$1.50 | 15–20 min |
-| `haiku-4.5-vs-5.5` | ~$0.55 | ~10 min |
-| **All 4 pairs** | **~$6.50** | **1–1.5 h** |
+| `opus-4.8-vs-5.5` | ~$2.50 | 20–30 min |
+| `sonnet-5-vs-5.5` | ~$1.20 | 15–20 min |
+| `sonnet-4.6-vs-5.5` | ~$1.20 | 15–20 min |
+| `haiku-4.5-vs-5.5` | ~$0.20 | 10–15 min |
+| **All 4 pairs** | **~$5** | **1–1.5 h** |
+
+The smoke test in 3.2 (one Haiku task, both models) costs about $0.02.
 
 The first R1 run is slower while Maven downloads its dependencies.
 
@@ -271,7 +283,7 @@ git push
 ```bash
 source .venv/bin/activate
 docker compose -f docker/docker-compose.yml up -d
-pytest -q                                              # 63 passed, 0 skipped
+pytest -q                                              # 73 passed, 0 skipped
 python report.py --list-runs                           # pairs and runs
 python runner.py --pair <pair> --repeats 3             # run
 python report.py --pair <pair>                         # scorecard → runs/<pair>/REPORT.md

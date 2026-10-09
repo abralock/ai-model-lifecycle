@@ -93,6 +93,28 @@ def test_parse_files_and_deletes():
     assert parse_deletes(txt) == ["x/old.txt"]
 
 
+def test_parse_files_tolerates_stray_leading_fence():
+    """Regression: a model opening a stray ``` before the header must not
+    collapse the body to empty (was scoring a correct answer as 'no SQL found')."""
+    txt = (
+        "```\n"
+        "### FILE: solution.sql\n"
+        "```\n"
+        "\n"
+        "```sql\n"
+        "CREATE TABLE t (id int);\n"
+        "```\n"
+    )
+    assert parse_files(txt) == {"solution.sql": "CREATE TABLE t (id int);\n"}
+
+
+def test_parse_files_tolerates_bare_fence_opener():
+    """A bare ``` opener (no language tag) immediately before content is the
+    opener, not a stray to skip."""
+    txt = "### FILE: x.sql\n```\nSELECT 2;\n```\n"
+    assert parse_files(txt) == {"x.sql": "SELECT 2;\n"}
+
+
 def test_run_path_is_filesystem_safe():
     p = run_path("pair-x", "anthropic/claude-opus-4.8", "r1_springboot2to3", run_dt="20261009")
     assert "/" not in p.name

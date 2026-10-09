@@ -138,6 +138,10 @@ def _golden_frame(dsn: str) -> pd.DataFrame:
     schema = _new_schema_name("r3_golden")
 
     conn = psycopg2.connect(dsn)
+    # Autocommit, as psql or an application would CALL it: Postgres only
+    # allows COMMIT inside a procedure when CALL is not wrapped in an explicit
+    # transaction, and the Oracle source procedures COMMIT.
+    conn.autocommit = True
     try:
         with conn.cursor() as cur:
             cur.execute(f'CREATE SCHEMA "{schema}";')
@@ -175,6 +179,10 @@ def _model_frame(dsn: str, model_sql: str) -> pd.DataFrame:
     schema = _new_schema_name("r3_model")
 
     conn = psycopg2.connect(dsn)
+    # Autocommit, as psql or an application would CALL it: Postgres only
+    # allows COMMIT inside a procedure when CALL is not wrapped in an explicit
+    # transaction, and the Oracle source procedures COMMIT.
+    conn.autocommit = True
     try:
         with conn.cursor() as cur:
             cur.execute(f'CREATE SCHEMA "{schema}";')

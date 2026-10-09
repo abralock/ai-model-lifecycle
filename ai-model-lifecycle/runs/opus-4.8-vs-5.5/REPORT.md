@@ -1,6 +1,6 @@
 # Gate 1 Scorecard — opus-4.8-vs-5.5
 
-> Generated: 2026-10-09T02:41:28+00:00  
+> Generated: 2026-10-09T02:46:39+00:00  
 > Current: **Claude Opus 4.8** (`anthropic/claude-opus-4.8`)  
 > Target: **Claude Opus 5.5** (`anthropic/claude-opus-5.5`)  
 > Run: 20261009T022349Z  ·  runs loaded: 24  ·  live scoring: on  

@@ -16,9 +16,9 @@ pairs:
     target:  {id: anthropic/claude-opus-5.5, name: "Claude Opus 5.5"}
 
 # --- Remaining matrix (enable in later waves) -------------------------------
-#  - id: sonnet-5-vs-5.5
-#    current: {id: anthropic/claude-sonnet-5,   name: "Claude Sonnet 5"}
-#    target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}
+  - id: sonnet-5-vs-5.5
+    current: {id: anthropic/claude-sonnet-5,   name: "Claude Sonnet 5"}
+    target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}
 #  - id: sonnet-4.6-vs-5.5
 #    current: {id: anthropic/claude-sonnet-4.6, name: "Claude Sonnet 4.6"}
 #    target:  {id: anthropic/claude-sonnet-5.5, name: "Claude Sonnet 5.5"}

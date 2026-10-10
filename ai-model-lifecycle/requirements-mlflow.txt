@@ -1,0 +1,4 @@
+# Optional: only for mlflow_export.py (see MLFLOW.md). Keep the client on the
+# same major/minor as the server image in docker/docker-compose.yml.
+-r requirements.txt
+mlflow>=3.17,<3.18

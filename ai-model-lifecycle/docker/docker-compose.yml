@@ -32,5 +32,24 @@ services:
       - aidb_pgdata:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro
 
+  # Optional MLflow server for browsing results (see MLFLOW.md). Only started
+  # with `--profile mlflow`, so the default `up -d` still starts Postgres only.
+  # Host port 5050, not 5000: macOS AirPlay Receiver already listens on 5000.
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.0
+    container_name: aidb-mlflow
+    profiles: ["mlflow"]
+    restart: unless-stopped
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+      --allowed-hosts '*'
+    ports:
+      - "127.0.0.1:5050:5000"
+    volumes:
+      - aidb_mlflow:/mlflow
+
 volumes:
   aidb_pgdata:
+  aidb_mlflow:

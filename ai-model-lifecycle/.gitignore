@@ -8,6 +8,10 @@ __pycache__/
 venv/
 *.egg-info/
 
+# mlflow_export.py score cache (re-creatable)
+.mlflow_score_cache.json
+mlruns/
+
 # Test output / run logs
 # results are the durable record — keep committed
 *.log

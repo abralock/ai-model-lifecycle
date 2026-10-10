@@ -16,6 +16,9 @@ New to this repo, or running it on a home PC? Follow
 **[RUN_AT_HOME.md](RUN_AT_HOME.md)** for a step-by-step guide (prerequisites,
 Windows/WSL notes, cost, troubleshooting, opencode/Claude Code prompts).
 
+To browse results in a web UI with history and side-by-side compare, see
+**[MLFLOW.md](MLFLOW.md)** (optional; `runs/` stays the source of truth).
+
 Short version (Docker running, Python 3.11+):
 
 ```bash

@@ -374,31 +374,48 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     lines.append("")
 
     # ---- weighted overall (normalized to current = 100) ------------------- #
-    if cur.passes and tgt.passes:
-        q = (tgt.pass_rate / cur.pass_rate * 100.0) if cur.pass_rate else 100.0
-        # cost per run, not per success: quality is already weighted above, so
-        # dividing by passes would penalise a failure twice
-        c = component(cur.mean_cost, tgt.mean_cost)
-        t = component(cur.mean_latency, tgt.mean_latency)
-        overall = W_QUALITY * q + W_COST * c + W_TIME * t
-        lower_quality = tgt.pass_rate < cur.pass_rate
-        if overall >= 100 and not lower_quality:
-            verdict = "target ≥ baseline ✅"
-        elif lower_quality:
-            verdict = ("target < baseline ⚠️ (lower pass rate than current: "
-                       "cheaper or faster does not make up for it)")
-        else:
-            verdict = "target < baseline ⚠️"
+    ov = overall_score(cur, tgt)
+    if ov:
         lines.append("## Overall score (current = 100 baseline)\n")
-        lines.append(f"- Quality component: {q:.1f}  (w={W_QUALITY})")
-        lines.append(f"- Cost component:    {c:.1f}  (w={W_COST}, clamped to "
+        lines.append(f"- Quality component: {ov.quality:.1f}  (w={W_QUALITY})")
+        lines.append(f"- Cost component:    {ov.cost:.1f}  (w={W_COST}, clamped to "
                      f"{COMPONENT_MIN:.0f}–{COMPONENT_MAX:.0f})")
-        lines.append(f"- Time component:    {t:.1f}  (w={W_TIME}, clamped to "
+        lines.append(f"- Time component:    {ov.time:.1f}  (w={W_TIME}, clamped to "
                      f"{COMPONENT_MIN:.0f}–{COMPONENT_MAX:.0f})")
-        lines.append(f"- **Overall: {overall:.1f}**  → {verdict}")
+        lines.append(f"- **Overall: {ov.overall:.1f}**  → {ov.verdict}")
         lines.append("")
 
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class Overall:
+    quality: float
+    cost: float
+    time: float
+    overall: float
+    verdict: str
+
+
+def overall_score(cur: ModelAgg, tgt: ModelAgg) -> Overall | None:
+    """Weighted overall score (current = 100) and verdict; None if either model has no pass."""
+    if not (cur.passes and tgt.passes):
+        return None
+    q = (tgt.pass_rate / cur.pass_rate * 100.0) if cur.pass_rate else 100.0
+    # cost per run, not per success: quality is already weighted above, so
+    # dividing by passes would penalise a failure twice
+    c = component(cur.mean_cost, tgt.mean_cost)
+    t = component(cur.mean_latency, tgt.mean_latency)
+    overall = W_QUALITY * q + W_COST * c + W_TIME * t
+    lower_quality = tgt.pass_rate < cur.pass_rate
+    if overall >= 100 and not lower_quality:
+        verdict = "target ≥ baseline ✅"
+    elif lower_quality:
+        verdict = ("target < baseline ⚠️ (lower pass rate than current: "
+                   "cheaper or faster does not make up for it)")
+    else:
+        verdict = "target < baseline ⚠️"
+    return Overall(q, c, t, overall, verdict)
 
 
 # --------------------------------------------------------------------------- #

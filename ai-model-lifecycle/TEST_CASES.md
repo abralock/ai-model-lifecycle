@@ -65,6 +65,10 @@ Continuity counts as a **bonus** — awarded only when downstream tasks succeed 
 
 ## Scoring model
 
+> **Implemented calculation:** see [SCORING.md](SCORING.md). The harness scores the
+> target against the current model (current = 100, cost and time capped at 50–150)
+> rather than per scenario, and does not enforce the exit criteria further down.
+
 ```
 Scenario score = Wq·Quality + Wc·Cost + Wt·Time   (normalized 0–100 vs baseline)
 Overall score  = Σ (scenario score × scenario weight)

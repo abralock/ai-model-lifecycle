@@ -154,7 +154,12 @@ Blocking inputs required before code:
 
 **Exit criteria addendum:** (3) Continuity chain R3→R4→R5 completes — no downstream break.
 
-**Scoring:**
+**Scoring:** (original plan)
+
+> **Implemented calculation:** see [SCORING.md](SCORING.md). The harness scores the
+> target against the current model (current = 100, cost and time capped at 50–150)
+> rather than per scenario, and does not enforce the exit criteria below.
+
 ```
 Scenario score = Wq·Quality + Wc·Cost + Wt·Time   (normalized 0–100 vs baseline)
 Overall score  = Σ (scenario score × scenario weight)

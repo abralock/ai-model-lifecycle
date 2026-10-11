@@ -189,7 +189,7 @@ Open `runs/<pair>/REPORT.md`. Check the top first:
 | **Time / Cost per run** | Speed and price per task. |
 | **Provider (runs)** | Which provider served each model's runs. Both models should use the same one. |
 | **Cost source** | Where the cost comes from: what OpenRouter billed (preferred) or the `pricing.py` table (fallback). |
-| **Overall score** | Current model = **100**. Above 100: the new model is better overall. Below: worse. Weights: Quality 50%, Cost 30%, Time 20%. Cost and time each count between 50 and 150, so a huge price or speed gap can't outweigh quality on its own. A new model that passes fewer tasks is never marked "target ≥ baseline". |
+| **Overall score** | Current model = **100**. Above 100: the new model is better overall. Below: worse. Weights: Quality 50%, Cost 30%, Time 20%. Cost and time each count between 50 and 150, so a huge price or speed gap can't outweigh quality on its own. A new model that passes fewer tasks is never marked "target ≥ baseline". Full explanation with examples: [SCORING.md](SCORING.md). |
 | **Failing runs** | Every failure with its reason. Read these before trusting a result. |
 
 > **Provider and cost:** every call is pinned to one provider (Amazon Bedrock for

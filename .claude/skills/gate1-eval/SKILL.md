@@ -96,3 +96,6 @@ Lead with quality, then speed, then cost, for each pair. Give passes as `x/12`,
 the overall score and verdict from `REPORT.md`, Fisher p, and one line per
 failure with its real error from `verify_failures.py`. Mention any rule above
 that wasn't met.
+
+To explain how an overall score or verdict was reached, use
+`ai-model-lifecycle/SCORING.md` (formula, 50–150 cap, verdict rule, worked examples).

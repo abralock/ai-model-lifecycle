@@ -19,6 +19,9 @@ Windows/WSL notes, cost, troubleshooting, opencode/Claude Code prompts).
 To browse results in a web UI with history and side-by-side compare, see
 **[MLFLOW.md](MLFLOW.md)** (optional; `runs/` stays the source of truth).
 
+How the overall score and verdict in `REPORT.md` are calculated, with worked
+examples: **[SCORING.md](SCORING.md)**.
+
 Short version (Docker running, Python 3.11+):
 
 ```bash

@@ -106,6 +106,8 @@ class RunResult:
     total_tokens: int = 0
     # --- provider / billing (OpenRouter) ---
     provider_requested: dict[str, Any] | None = None   # routing prefs sent
+    reasoning_requested: dict[str, Any] | None = None  # thinking budget sent (None = model default)
+    reasoning_tokens: int = 0                           # of output_tokens, spent thinking (if reported)
     provider: str | None = None                         # provider that served it
     billed_cost_usd: float | None = None                # OpenRouter usage.cost
     # --- timing ---
@@ -217,6 +219,17 @@ class CallResult(NamedTuple):
     error: str | None
     provider: str | None = None
     billed_cost_usd: float | None = None
+    reasoning_tokens: int = 0
+
+
+def _extract_reasoning_tokens(resp: Any) -> int:
+    """Output tokens spent on hidden thinking (usage.completion_tokens_details), or 0."""
+    usage = getattr(resp, "usage", None)
+    if usage is not None and not isinstance(usage, dict) and hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
+    details = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+    n = details.get("reasoning_tokens") if isinstance(details, dict) else None
+    return int(n) if isinstance(n, (int, float)) else 0
 
 
 def _extract_billed_cost(resp: Any) -> float | None:
@@ -239,13 +252,16 @@ def call_model(
     backoff_base_s: float,
     dry_run: bool = False,
     provider_prefs: dict[str, Any] | None = None,
+    reasoning: dict[str, Any] | None = None,
 ) -> CallResult:
     """Call one model through OpenRouter and return a CallResult.
 
     `provider_prefs` (OpenRouter provider routing, e.g. {"order": ["Amazon
     Bedrock"], "allow_fallbacks": false}) is sent on every request so both
     models of a pair run on the same provider. Every request also asks
-    OpenRouter to report its billed cost (usage.cost).
+    OpenRouter to report its billed cost (usage.cost). `reasoning` (OpenRouter's
+    reasoning preferences, e.g. {"max_tokens": 16000}) caps hidden thinking,
+    which otherwise shares max_tokens with the answer.
 
     Retries on 429 / 5xx / transient errors with exponential backoff. Never
     raises for a provider error — returns an `error` string instead so the run
@@ -274,6 +290,8 @@ def call_model(
     extra_body: dict[str, Any] = {"usage": {"include": True}}
     if provider_prefs:
         extra_body["provider"] = provider_prefs
+    if reasoning:
+        extra_body["reasoning"] = reasoning
 
     last_err: str | None = None
     for attempt in range(1, max_retries + 1):
@@ -321,6 +339,7 @@ def call_model(
                 None if text else f"empty completion (finish_reason={finish_reason})",
                 provider=getattr(resp, "provider", None),
                 billed_cost_usd=_extract_billed_cost(resp),
+                reasoning_tokens=_extract_reasoning_tokens(resp),
             )
 
         except Exception as exc:  # noqa: BLE001 - we intentionally catch all
@@ -364,12 +383,13 @@ def run_case(
         model.id,
         prompt,
         temperature=cfg.temperature,
-        max_tokens=cfg.max_tokens,
+        max_tokens=cfg.max_tokens_for(model.id),
         timeout_s=cfg.timeout_s,
         max_retries=cfg.max_retries,
         backoff_base_s=cfg.backoff_base_s,
         dry_run=dry_run,
         provider_prefs=provider_prefs,
+        reasoning=cfg.reasoning,
     )
     usage, attempts, latency, text, finish_reason, err = call[:6]
     result = RunResult(
@@ -382,7 +402,7 @@ def run_case(
         rep=rep,
         run_id=run_id,
         temperature=cfg.temperature,
-        max_tokens=cfg.max_tokens,
+        max_tokens=cfg.max_tokens_for(model.id),
         latency_s=round(latency, 4),
         attempts=attempts,
         prompt=prompt,
@@ -392,6 +412,8 @@ def run_case(
         error=err,
         created_at=time.time(),
         provider_requested=provider_prefs,
+        reasoning_requested=cfg.reasoning,
+        reasoning_tokens=call.reasoning_tokens,
         provider=call.provider,
         billed_cost_usd=call.billed_cost_usd,
         **usage,

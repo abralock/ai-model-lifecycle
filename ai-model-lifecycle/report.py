@@ -34,6 +34,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -75,6 +76,7 @@ class ModelAgg:
     cache_read: int = 0
     cache_write: int = 0
     total_tokens: int = 0
+    reasoning_tokens: int = 0       # part of output_tokens spent thinking (when reported)
     cost_usd: float = 0.0
     billed_runs: int = 0            # runs whose cost is OpenRouter's billed cost
     providers: dict[str, int] = field(default_factory=dict)  # provider -> runs
@@ -165,6 +167,7 @@ def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
         a.cache_read += int(rec.get("cache_read_tokens", 0) or 0)
         a.cache_write += int(rec.get("cache_write_tokens", 0) or 0)
         a.total_tokens += int(rec.get("total_tokens", 0) or 0)
+        a.reasoning_tokens += int(rec.get("reasoning_tokens", 0) or 0)
         a.latency_sum += float(rec.get("latency_s", 0.0) or 0.0)
         # cost: what OpenRouter billed when recorded, else the price table
         billed = rec.get("billed_cost_usd")
@@ -278,6 +281,15 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     if missing:
         lines.append(f"> ⚠️ **Partial run** — missing cases: {', '.join(missing)}. "
                      f"Not a full Gate 1 scorecard.  ")
+    limits = {role: sorted({r.get("max_tokens") for r in runs if r.get("role") == role and r.get("max_tokens")})
+              for role in ("current", "target")}
+    if runs and any(limits.values()):
+        fmt = lambda v: "/".join(f"{x:,}" for x in v) or "—"
+        lines.append(f"> Output limit (max_tokens): current {fmt(limits['current'])} · "
+                     f"target {fmt(limits['target'])}  ")
+    thinking = {json.dumps(r.get("reasoning_requested"), sort_keys=True) for r in runs}
+    if thinking != {"null"} and runs:
+        lines.append(f"> Thinking budget sent: {', '.join(sorted(thinking))} (models.yaml `reasoning`)  ")
     if skipped:
         lines.append(f"> Newer partial run(s) not scored here: {', '.join(skipped)} "
                      f"(see `report.py --run <id>`).  ")
@@ -331,6 +343,7 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     for label, c, t in (
         ("input tokens", cur.input_tokens, tgt.input_tokens),
         ("output tokens", cur.output_tokens, tgt.output_tokens),
+        ("· of which thinking", cur.reasoning_tokens, tgt.reasoning_tokens),
         ("cache-read tokens", cur.cache_read, tgt.cache_read),
         ("cache-write tokens", cur.cache_write, tgt.cache_write),
         ("**total token spend**", cur.total_tokens, tgt.total_tokens),

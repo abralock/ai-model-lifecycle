@@ -29,8 +29,10 @@ REAL = load_config(suite="real")
 def test_real_suite_config():
     assert REAL.suite == "real"
     assert REAL.cases == ["r1b_jhipster_boot3", "r2_gwt_to_angular"]
-    assert REAL.max_tokens == 64000          # suite override; sanity keeps 32000
-    assert REAL.timeout_s == 900
+    assert REAL.max_tokens == 128000         # suite override; sanity keeps 32000
+    assert REAL.max_tokens_for("anthropic/claude-haiku-4.5") == 64000      # its Bedrock maximum
+    assert REAL.max_tokens_for("anthropic/claude-sonnet-5.5") == 128000
+    assert REAL.timeout_s == 1800
     assert REAL.report_name == "REPORT.real.md"
     sanity = load_config()
     assert sanity.suite == "sanity" and sanity.report_name == "REPORT.md"
@@ -288,3 +290,117 @@ def test_run_command_does_not_wait_for_leftover_children():
     rc, out = run_command(["bash", "-c", "sleep 30 & echo done"], timeout=20)
     assert rc == 0 and out.strip() == "done" and time.time() - t < 10
     assert run_command(["no-such-binary-xyz"]) == (127, "command not found: no-such-binary-xyz")
+
+
+# --------------------------------------------------------------------------- #
+# thinking budget                                                              #
+# --------------------------------------------------------------------------- #
+def test_real_suite_caps_thinking_and_sanity_does_not():
+    assert REAL.reasoning == {"effort": "medium"}
+    assert load_config().reasoning is None
+
+
+def test_call_sends_thinking_budget_and_records_thinking_tokens(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    import common
+    import runner
+
+    calls = []
+
+    def completion(**kw):
+        calls.append(kw)
+        msg = types.SimpleNamespace(content="### FILE: a\n```\nx\n```\n")
+        usage = {"prompt_tokens": 10, "completion_tokens": 900, "total_tokens": 910, "cost": 0.01,
+                 "completion_tokens_details": {"reasoning_tokens": 700}}
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")],
+                                     usage=usage, provider="Amazon Bedrock")
+
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(drop_params=False, completion=completion))
+    monkeypatch.setenv("OPENROUTER_TOKEN", "sk-or-v1-test")
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    pair = REAL.get_pair("haiku-4.5-vs-5.5")
+    res = runner.run_case(REAL, pair.id, "r2_gwt_to_angular", pair.target, "target", run_id="20261013T000000Z")
+    assert calls[0]["extra_body"]["reasoning"] == {"effort": "medium"}
+    assert calls[0]["max_tokens"] == 128000                              # Haiku 5.5 (target)
+    assert res.max_tokens == 128000
+    assert res.reasoning_requested == {"effort": "medium"} and res.reasoning_tokens == 700
+
+    runner.run_case(REAL, pair.id, "r2_gwt_to_angular", pair.current, "current", run_id="20261013T000002Z")
+    assert calls[1]["max_tokens"] == 64000                               # Haiku 4.5: its maximum
+
+    sanity = load_config()
+    runner.run_case(sanity, pair.id, "r3_oracle_to_postgres", pair.target, "target", run_id="20261013T000001Z")
+    assert "reasoning" not in calls[2]["extra_body"]                     # default behavior untouched
+    assert calls[2]["max_tokens"] == 32000
+
+
+def test_report_shows_thinking_budget_and_tokens():
+    import report
+
+    base = {"case_id": "r2_gwt_to_angular", "ok": True, "output_text": "", "latency_s": 1.0,
+            "billed_cost_usd": 0.1, "provider": "Amazon Bedrock", "_run": "20261013T000000Z",
+            "reasoning_requested": {"effort": "medium"}}
+    pair = REAL.get_pair("haiku-4.5-vs-5.5")
+    runs = [dict(base, role="current", model_slug=pair.current.id, output_tokens=100, reasoning_tokens=0,
+                 max_tokens=64000),
+            dict(base, role="target", model_slug=pair.target.id, output_tokens=900, reasoning_tokens=700,
+                 max_tokens=128000)]
+    md = report.render_pair(REAL, pair.id, report.aggregate(runs, score=False), runs, score=False)
+    assert '> Thinking budget sent: {"effort": "medium"}' in md
+    assert "> Output limit (max_tokens): current 64,000 · target 128,000" in md
+    assert "| · of which thinking | 0 | 700 |" in md
+
+
+def test_apply_edits_matches_a_unique_fragment_inside_a_line(tmp_path):
+    from scorers.base import Edit
+
+    (tmp_path / "R.java").write_text(
+        "class R {\n"
+        "    List<U> all(@org.springdoc.api.annotations.ParameterObject Pageable p) { return x; }\n"
+        "    int a = 1; int b = 1;\n"
+        "}\n")
+    applied, failures = apply_edits([
+        # a fragment of a line, unique in the file: replaced in place
+        Edit("R.java", "@org.springdoc.api.annotations.ParameterObject\n",
+             "@org.springdoc.core.annotations.ParameterObject\n"),
+        # a fragment that occurs twice is ambiguous: refused, file unchanged there
+        Edit("R.java", " = 1\n", " = 2\n"),
+    ], tmp_path)
+    assert applied == ["R.java"]
+    assert failures == ["R.java: SEARCH text not found (starts ' = 1')"]
+    assert (tmp_path / "R.java").read_text() == (
+        "class R {\n"
+        "    List<U> all(@org.springdoc.core.annotations.ParameterObject Pageable p) { return x; }\n"
+        "    int a = 1; int b = 1;\n"
+        "}\n")
+
+
+def test_apply_edits_ignores_indentation_when_unambiguous(tmp_path):
+    from scorers.base import Edit
+
+    (tmp_path / "pom.xml").write_text(
+        "<properties>\n"
+        "        <liquibase.version>4.15.0</liquibase.version>\n"
+        "        <liquibase-hibernate5.version>4.15.0</liquibase-hibernate5.version>\n"
+        "</properties>\n"
+        "<a>\n    <x>1</x>\n</a>\n<b>\n    <x>1</x>\n</b>\n")
+    applied, failures = apply_edits([
+        Edit("pom.xml",                                   # indentation dropped, unique
+             "<liquibase.version>4.15.0</liquibase.version>\n"
+             "<liquibase-hibernate5.version>4.15.0</liquibase-hibernate5.version>\n",
+             "        <liquibase.version>4.24.0</liquibase.version>\n"
+             "        <liquibase-hibernate6.version>4.24.0</liquibase-hibernate6.version>\n"),
+        Edit("pom.xml", "<x>1</x>\n</a>\n<b>\n<x>1</x>\n", "gone\n"),   # unique window: applies
+        Edit("pom.xml", "<y>\n", "z\n"),                              # nowhere: still fails
+    ], tmp_path)
+    assert applied == ["pom.xml", "pom.xml"] and failures == ["pom.xml: SEARCH text not found (starts '<y>')"]
+    assert (tmp_path / "pom.xml").read_text() == (
+        "<properties>\n"
+        "        <liquibase.version>4.24.0</liquibase.version>\n"
+        "        <liquibase-hibernate6.version>4.24.0</liquibase-hibernate6.version>\n"
+        "</properties>\n"
+        "<a>\n    gone\n</b>\n".replace("    gone", "gone"))
+    from scorers.base import _unique_dedented_match
+    assert _unique_dedented_match("<a>\n  <x/>\n</a>\n<b>\n  <x/>\n</b>\n", "<x/>\n") is None   # twice: refused

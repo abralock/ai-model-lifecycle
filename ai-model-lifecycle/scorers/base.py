@@ -192,13 +192,29 @@ def _strip_trailing_ws(s: str) -> str:
     return "\n".join(line.rstrip() for line in s.replace("\r\n", "\n").split("\n"))
 
 
+def _unique_dedented_match(body: str, search: str) -> tuple[int, int] | None:
+    """(start, end) line indexes where SEARCH's lines equal the file's ignoring
+    leading/trailing whitespace, if that happens exactly once; else None."""
+    want = [ln.strip() for ln in search.splitlines()]
+    if not any(want):
+        return None
+    have = [ln.strip() for ln in body.splitlines()]
+    n = len(want)
+    hits = [i for i in range(len(have) - n + 1) if have[i:i + n] == want]
+    return (hits[0], hits[0] + n) if len(hits) == 1 else None
+
+
 def apply_edits(edits: list[Edit], dest: Path) -> tuple[list[str], list[str]]:
     """Apply edits to files under `dest`, in order. Returns (applied, failures).
 
     The SEARCH text must occur in the file; the first occurrence is replaced.
     Matching is exact, except that trailing whitespace and CRLF line endings
-    are ignored. An empty SEARCH on a missing file creates it. Paths that
-    escape `dest` are refused like any other failure.
+    are ignored. Failing that, a SEARCH that is part of a line (its text
+    without the final line break) matches if it occurs exactly once in the
+    file, and is replaced in place: `@a.b.Param` inside `f(@a.b.Param T t)`.
+    Last, whole lines match ignoring their indentation, again only where that
+    happens exactly once (the REPLACE lines are written as given). An empty SEARCH on a missing file creates it. Paths that escape `dest` are
+    refused like any other failure.
     """
     dest = dest.resolve()
     applied: list[str] = []
@@ -225,6 +241,22 @@ def apply_edits(edits: list[Edit], dest: Path) -> tuple[list[str], list[str]]:
         if norm_search.strip() and norm_search in norm_body:
             target.write_text(norm_body.replace(norm_search, _strip_trailing_ws(e.replace), 1),
                               encoding="utf-8")
+            applied.append(e.path)
+            continue
+        # a fragment of a line: the block format always ends SEARCH with a line
+        # break, which the middle of a line does not have. Unique matches only,
+        # so an ambiguous fragment still fails instead of editing the wrong spot.
+        frag = e.search[:-1] if e.search.endswith("\n") else e.search
+        if frag.strip() and body.count(frag) == 1:
+            repl = e.replace[:-1] if e.replace.endswith("\n") else e.replace
+            target.write_text(body.replace(frag, repl, 1), encoding="utf-8")
+            applied.append(e.path)
+            continue
+        hit = _unique_dedented_match(body, e.search)
+        if hit is not None:
+            lines = body.splitlines(keepends=True)
+            lines[hit[0]:hit[1]] = [e.replace]
+            target.write_text("".join(lines), encoding="utf-8")
             applied.append(e.path)
             continue
         first = next((ln for ln in e.search.splitlines() if ln.strip()), "")[:80]

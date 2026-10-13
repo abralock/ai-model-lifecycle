@@ -99,6 +99,12 @@ class Config:
     def backoff_base_s(self) -> float:
         return float(self.defaults.get("backoff_base_s", 2))
 
+    @property
+    def reasoning(self) -> dict[str, Any] | None:
+        """OpenRouter `reasoning` preferences (e.g. {"max_tokens": 16000}), or None
+        to leave each model's default thinking behavior alone."""
+        return self.defaults.get("reasoning") or None
+
     def provider_for(self, pair_id: str) -> dict[str, Any] | None:
         """OpenRouter provider preferences for a pair (sent on every call).
 

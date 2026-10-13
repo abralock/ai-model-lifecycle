@@ -288,3 +288,56 @@ def test_run_command_does_not_wait_for_leftover_children():
     rc, out = run_command(["bash", "-c", "sleep 30 & echo done"], timeout=20)
     assert rc == 0 and out.strip() == "done" and time.time() - t < 10
     assert run_command(["no-such-binary-xyz"]) == (127, "command not found: no-such-binary-xyz")
+
+
+# --------------------------------------------------------------------------- #
+# thinking budget                                                              #
+# --------------------------------------------------------------------------- #
+def test_real_suite_caps_thinking_and_sanity_does_not():
+    assert REAL.reasoning == {"effort": "medium"}
+    assert load_config().reasoning is None
+
+
+def test_call_sends_thinking_budget_and_records_thinking_tokens(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    import common
+    import runner
+
+    calls = []
+
+    def completion(**kw):
+        calls.append(kw)
+        msg = types.SimpleNamespace(content="### FILE: a\n```\nx\n```\n")
+        usage = {"prompt_tokens": 10, "completion_tokens": 900, "total_tokens": 910, "cost": 0.01,
+                 "completion_tokens_details": {"reasoning_tokens": 700}}
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")],
+                                     usage=usage, provider="Amazon Bedrock")
+
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(drop_params=False, completion=completion))
+    monkeypatch.setenv("OPENROUTER_TOKEN", "sk-or-v1-test")
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    pair = REAL.get_pair("haiku-4.5-vs-5.5")
+    res = runner.run_case(REAL, pair.id, "r2_gwt_to_angular", pair.target, "target", run_id="20261013T000000Z")
+    assert calls[0]["extra_body"]["reasoning"] == {"effort": "medium"}
+    assert calls[0]["max_tokens"] == 64000
+    assert res.reasoning_requested == {"effort": "medium"} and res.reasoning_tokens == 700
+
+    sanity = load_config()
+    runner.run_case(sanity, pair.id, "r3_oracle_to_postgres", pair.target, "target", run_id="20261013T000001Z")
+    assert "reasoning" not in calls[1]["extra_body"]                     # default behavior untouched
+
+
+def test_report_shows_thinking_budget_and_tokens():
+    import report
+
+    base = {"case_id": "r2_gwt_to_angular", "ok": True, "output_text": "", "latency_s": 1.0,
+            "billed_cost_usd": 0.1, "provider": "Amazon Bedrock", "_run": "20261013T000000Z",
+            "reasoning_requested": {"effort": "medium"}}
+    pair = REAL.get_pair("haiku-4.5-vs-5.5")
+    runs = [dict(base, role="current", model_slug=pair.current.id, output_tokens=100, reasoning_tokens=0),
+            dict(base, role="target", model_slug=pair.target.id, output_tokens=900, reasoning_tokens=700)]
+    md = report.render_pair(REAL, pair.id, report.aggregate(runs, score=False), runs, score=False)
+    assert '> Thinking budget sent: {"effort": "medium"}' in md
+    assert "| · of which thinking | 0 | 700 |" in md

@@ -74,6 +74,14 @@ suites:
     # 64k is the highest output Haiku 4.5 allows on Bedrock; the others allow 128k.
     max_tokens: 64000
     timeout_s: 900
+    # Thinking (hidden reasoning) shares max_tokens with the answer. By default
+    # Sonnet 5 thought through all 64k on r1b and answered nothing, or only part
+    # (run 20261013T062754Z). A thinking budget ({max_tokens: 16000}) was not
+    # enforced: Sonnet 5 thought 35k, Sonnet 5.5 all 64k (run 20261013T065621Z).
+    # So every model gets the same effort level instead. Sent as OpenRouter's
+    # `reasoning` parameter; it also turns thinking ON for models that do not
+    # think by default.
+    reasoning: {effort: medium}
     cases:
       - r1b_jhipster_boot3
       - r2_gwt_to_angular

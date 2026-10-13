@@ -32,6 +32,10 @@ Validated on 2026-10-13 against a reference migration (Spring Boot 3.1.5,
 JHipster 8.0.0, Hibernate 6.2, problem-spring-web 0.29.1): `mvn -P-webapp
 verify` passes all 52 + 140 with checkstyle and modernizer. The unmigrated
 v7.9.3 project with its original tests passes the same 52 + 140 on Boot 2.7.
+A committed known-good answer, `tests/r1b_reference_answer.txt` (Opus 5.5's
+answer plus three hand fixes, see `cases/r1b_jhipster_boot3/NEAR_MISS.md`),
+passes every stage including the 54 Cypress tests:
+`GATE1_SLOW_TESTS=1 pytest -q tests/test_r1b_reference_slow.py`.
 
 `r2_parity/` — 8 Playwright tests ported from the GWTP carstore's Cucumber
 features, with the original Selenium page objects' selectors. Validated on

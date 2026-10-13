@@ -59,6 +59,17 @@ integration tests already passed.
 - **One answer is one sample.** A full `--repeats 3` run of the Opus pair on the
   real suite is needed before saying anything about Opus 5.5 vs 4.8 here.
 
+## Kept as a regression test
+
+The fixed answer is `tests/r1b_reference_answer.txt`. Two tests use it:
+
+- `test_r1b_reference_answer_passes_the_static_checks` (in `test_real_suite.py`,
+  part of the normal `pytest -q`): it applies cleanly and passes the pre-build checks.
+- `tests/test_r1b_reference_slow.py`: the full scorer passes it, build to e2e.
+  Opt in with `GATE1_SLOW_TESTS=1 pytest -q tests/test_r1b_reference_slow.py`
+  (about 2 min with a warm Maven cache). Run it after changing the scorer, the
+  hidden tests or the e2e setup: if it fails, the harness broke, not a model.
+
 ## Reproduce
 
 Score any answer the same way (Docker, and `setup_e2e.sh` run once for the e2e

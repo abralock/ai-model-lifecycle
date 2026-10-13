@@ -42,7 +42,8 @@ fi
 # add index.html after it (/ still serves CarStore.html, which is tried first).
 WEBXML="$CACHE/carstore-war/WEB-INF/web.xml"
 if ! grep -q "<welcome-file>index.html</welcome-file>" "$WEBXML"; then
-  sed -i 's#<welcome-file>CarStore.html</welcome-file>#&\n        <welcome-file>index.html</welcome-file>#' "$WEBXML"
+  # perl, not `sed -i`: macOS (BSD) sed needs `-i ''` and has no \n in replacements
+  perl -pi -e 's#<welcome-file>CarStore.html</welcome-file>#$&\n        <welcome-file>index.html</welcome-file>#' "$WEBXML"
 fi
 
 if [ ! -d "$CACHE/deps/node_modules/@angular/cli" ]; then

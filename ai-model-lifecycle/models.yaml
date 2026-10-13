@@ -70,6 +70,9 @@ cases:
 suites:
   # Real open-source projects (whole codebase in the prompt, ~50-120k tokens).
   real:
+    # 32k cut answers short: Haiku 5.5 used 28.9k on r2 alone (2026-10-13).
+    # 64k is the highest output Haiku 4.5 allows on Bedrock; the others allow 128k.
+    max_tokens: 64000
     timeout_s: 900
     cases:
       - r1b_jhipster_boot3

@@ -1,9 +1,10 @@
 # Gate 1 Scorecard — haiku-4.5-vs-5.5 · real suite
 
-> Generated: 2026-10-13T05:51:52+00:00  
+> Generated: 2026-10-13T08:20:24+00:00  
 > Current: **Claude Haiku 4.5** (`anthropic/claude-haiku-4.5`)  
 > Target: **Claude Haiku 5.5** (`anthropic/claude-haiku-5.5`)  
-> Run: 20261013T052330Z  ·  runs loaded: 12  ·  live scoring: on  
+> Run: 20261013T072547Z  ·  runs loaded: 12  ·  live scoring: on  
+> Thinking budget sent: {"effort": "medium"} (models.yaml `reasoning`)  
 
 ## Summary — Current vs Target
 
@@ -15,9 +16,9 @@
 | Infra errors (excluded) | 0 | 0 | — |
 | Provider (runs) | Amazon Bedrock ×6 | Amazon Bedrock ×6 | — |
 | Cost source | billed by OpenRouter (6/6) | billed by OpenRouter (6/6) | — |
-| Time (mean latency, s) | 33.61 | 133.70 | +297.8% 🔴 |
-| Cost (total USD) | $0.6166 | $0.5686 | -7.8% 🟢 |
-| Cost / run (USD) | $0.1028 | $0.0948 | -7.8% 🟢 |
+| Time (mean latency, s) | 70.49 | 144.02 | +104.3% 🔴 |
+| Cost (total USD) | $0.7991 | $0.5905 | -26.1% 🟢 |
+| Cost / run (USD) | $0.1332 | $0.0984 | -26.1% 🟢 |
 
 > ⚠️ The quality difference is **not statistically significant** (Fisher p = 0.18, n = 6 vs 6). Add cases or repeats before treating it as a real difference.
 
@@ -25,19 +26,20 @@
 
 | Bucket | Current | Target | Δ |
 |---|---:|---:|---:|
-| input tokens | 394,974 | 544,545 | +37.9% 🔴 |
-| output tokens | 44,321 | 226,797 | +411.7% 🔴 |
+| input tokens | 395,154 | 544,545 | +37.8% 🔴 |
+| output tokens | 80,796 | 241,017 | +198.3% 🔴 |
+| · of which thinking | 36,368 | 157,762 | +333.8% 🔴 |
 | cache-read tokens | 0 | 0 | n/a |
 | cache-write tokens | 0 | 0 | n/a |
-| **total token spend** | 439,295 | 771,342 | +75.6% 🔴 |
+| **total token spend** | 475,950 | 785,562 | +65.1% 🔴 |
 
 ## Normalized views
 
 | Metric | Current | Target | Δ |
 |---|---:|---:|---:|
-| Tokens / successful task | 0 | 257,114 | n/a |
+| Tokens / successful task | 0 | 261,854 | n/a |
 | Cache hit-rate % | 0.0% | 0.0% | n/a |
-| Cost / successful task (USD) | $0.0000 | $0.1895 | n/a |
+| Cost / successful task (USD) | $0.0000 | $0.1968 | n/a |
 
 ## Per-case quality (passes / runs)
 
@@ -50,15 +52,15 @@
 
 | Model | Run file | Reason |
 |---|---|---|
-| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r1b_jhipster_boot3.20261013T052330Z.json` | failed checks: javax_free, build, unit_tests, integration_tests, e2e |
-| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r1b_jhipster_boot3.20261013T052330Z.r1.json` | failed checks: javax_free, build, unit_tests, integration_tests, e2e |
-| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r1b_jhipster_boot3.20261013T052330Z.r2.json` | failed checks: edits_applied, javax_free, build, unit_tests, integration_tests, e2e (1 edit(s) did not apply) |
-| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r2_gwt_to_angular.20261013T052330Z.json` | failed checks: parity (parity 2 passed, 2 failed) |
-| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r2_gwt_to_angular.20261013T052330Z.r1.json` | failed checks: parity (parity 7 passed, 1 failed) |
-| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r2_gwt_to_angular.20261013T052330Z.r2.json` | failed checks: parity (parity 2 passed, 2 failed) |
-| Claude Haiku 5.5 | `anthropic__claude-haiku-5.5.r1b_jhipster_boot3.20261013T052330Z.json` | failed checks: build, unit_tests, integration_tests, e2e |
-| Claude Haiku 5.5 | `anthropic__claude-haiku-5.5.r1b_jhipster_boot3.20261013T052330Z.r1.json` | failed checks: edits_applied, build, unit_tests, integration_tests, e2e (3 edit(s) did not apply) |
-| Claude Haiku 5.5 | `anthropic__claude-haiku-5.5.r1b_jhipster_boot3.20261013T052330Z.r2.json` | failed checks: build, unit_tests, integration_tests, e2e |
+| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r1b_jhipster_boot3.20261013T072547Z.json` | failed checks: edits_applied, build, unit_tests, integration_tests, e2e (1 edit(s) did not apply) |
+| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r1b_jhipster_boot3.20261013T072547Z.r1.json` | failed checks: edits_applied, javax_free, build, unit_tests, integration_tests, e2e (2 edit(s) did not apply) |
+| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r1b_jhipster_boot3.20261013T072547Z.r2.json` | failed checks: build, unit_tests, integration_tests, e2e |
+| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r2_gwt_to_angular.20261013T072547Z.json` | failed checks: parity (parity 3 passed, 2 failed) |
+| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r2_gwt_to_angular.20261013T072547Z.r1.json` | failed checks: build, parity |
+| Claude Haiku 4.5 | `anthropic__claude-haiku-4.5.r2_gwt_to_angular.20261013T072547Z.r2.json` | failed checks: build, parity |
+| Claude Haiku 5.5 | `anthropic__claude-haiku-5.5.r1b_jhipster_boot3.20261013T072547Z.json` | failed checks: build, unit_tests, integration_tests, e2e |
+| Claude Haiku 5.5 | `anthropic__claude-haiku-5.5.r1b_jhipster_boot3.20261013T072547Z.r1.json` | failed checks: build, unit_tests, integration_tests, e2e |
+| Claude Haiku 5.5 | `anthropic__claude-haiku-5.5.r1b_jhipster_boot3.20261013T072547Z.r2.json` | failed checks: build, unit_tests, integration_tests, e2e |
 
 ### Price reference (USD / 1M tokens, `pricing.py`; used only when no billed cost)
 

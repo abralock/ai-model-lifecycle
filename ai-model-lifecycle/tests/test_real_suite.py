@@ -341,3 +341,56 @@ def test_report_shows_thinking_budget_and_tokens():
     md = report.render_pair(REAL, pair.id, report.aggregate(runs, score=False), runs, score=False)
     assert '> Thinking budget sent: {"effort": "medium"}' in md
     assert "| · of which thinking | 0 | 700 |" in md
+
+
+def test_apply_edits_matches_a_unique_fragment_inside_a_line(tmp_path):
+    from scorers.base import Edit
+
+    (tmp_path / "R.java").write_text(
+        "class R {\n"
+        "    List<U> all(@org.springdoc.api.annotations.ParameterObject Pageable p) { return x; }\n"
+        "    int a = 1; int b = 1;\n"
+        "}\n")
+    applied, failures = apply_edits([
+        # a fragment of a line, unique in the file: replaced in place
+        Edit("R.java", "@org.springdoc.api.annotations.ParameterObject\n",
+             "@org.springdoc.core.annotations.ParameterObject\n"),
+        # a fragment that occurs twice is ambiguous: refused, file unchanged there
+        Edit("R.java", " = 1\n", " = 2\n"),
+    ], tmp_path)
+    assert applied == ["R.java"]
+    assert failures == ["R.java: SEARCH text not found (starts ' = 1')"]
+    assert (tmp_path / "R.java").read_text() == (
+        "class R {\n"
+        "    List<U> all(@org.springdoc.core.annotations.ParameterObject Pageable p) { return x; }\n"
+        "    int a = 1; int b = 1;\n"
+        "}\n")
+
+
+def test_apply_edits_ignores_indentation_when_unambiguous(tmp_path):
+    from scorers.base import Edit
+
+    (tmp_path / "pom.xml").write_text(
+        "<properties>\n"
+        "        <liquibase.version>4.15.0</liquibase.version>\n"
+        "        <liquibase-hibernate5.version>4.15.0</liquibase-hibernate5.version>\n"
+        "</properties>\n"
+        "<a>\n    <x>1</x>\n</a>\n<b>\n    <x>1</x>\n</b>\n")
+    applied, failures = apply_edits([
+        Edit("pom.xml",                                   # indentation dropped, unique
+             "<liquibase.version>4.15.0</liquibase.version>\n"
+             "<liquibase-hibernate5.version>4.15.0</liquibase-hibernate5.version>\n",
+             "        <liquibase.version>4.24.0</liquibase.version>\n"
+             "        <liquibase-hibernate6.version>4.24.0</liquibase-hibernate6.version>\n"),
+        Edit("pom.xml", "<x>1</x>\n</a>\n<b>\n<x>1</x>\n", "gone\n"),   # unique window: applies
+        Edit("pom.xml", "<y>\n", "z\n"),                              # nowhere: still fails
+    ], tmp_path)
+    assert applied == ["pom.xml", "pom.xml"] and failures == ["pom.xml: SEARCH text not found (starts '<y>')"]
+    assert (tmp_path / "pom.xml").read_text() == (
+        "<properties>\n"
+        "        <liquibase.version>4.24.0</liquibase.version>\n"
+        "        <liquibase-hibernate6.version>4.24.0</liquibase-hibernate6.version>\n"
+        "</properties>\n"
+        "<a>\n    gone\n</b>\n".replace("    gone", "gone"))
+    from scorers.base import _unique_dedented_match
+    assert _unique_dedented_match("<a>\n  <x/>\n</a>\n<b>\n  <x/>\n</b>\n", "<x/>\n") is None   # twice: refused

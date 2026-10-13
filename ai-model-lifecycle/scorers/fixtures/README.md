@@ -32,3 +32,12 @@ Validated on 2026-10-13 against a reference migration (Spring Boot 3.1.5,
 JHipster 8.0.0, Hibernate 6.2, problem-spring-web 0.29.1): `mvn -P-webapp
 verify` passes all 52 + 140 with checkstyle and modernizer. The unmigrated
 v7.9.3 project with its original tests passes the same 52 + 140 on Boot 2.7.
+
+`r2_parity/` — 8 Playwright tests ported from the GWTP carstore's Cucumber
+features, with the original Selenium page objects' selectors. Validated on
+2026-10-13: the original GWT app passes 8/8 (`python -m scorers.r2_scorer
+--baseline`), and so does an Angular port (Claude Haiku 5.5's answer from run
+20261013T020049Z with its four `/api/manufacturer` URLs corrected to the
+contract's `/api/manufacturers`). The unmodified answers of Haiku 4.5 and 5.5
+fail on genuine mistakes: wrong REST paths, and a missing debug id
+(`create-manufacturer`).

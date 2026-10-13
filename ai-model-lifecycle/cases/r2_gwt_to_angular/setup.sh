@@ -37,6 +37,14 @@ if [ ! -f "$CACHE/carstore-war/CarStore.html" ]; then
   rm -rf "$CACHE/carstore-war/WEB-INF/appengine-generated"
 fi
 
+# The Angular port is served at /ng/ from the same war. web.xml only lists
+# CarStore.html as a welcome file, so /ng/ answered 403 and no port could pass:
+# add index.html after it (/ still serves CarStore.html, which is tried first).
+WEBXML="$CACHE/carstore-war/WEB-INF/web.xml"
+if ! grep -q "<welcome-file>index.html</welcome-file>" "$WEBXML"; then
+  sed -i 's#<welcome-file>CarStore.html</welcome-file>#&\n        <welcome-file>index.html</welcome-file>#' "$WEBXML"
+fi
+
 if [ ! -d "$CACHE/deps/node_modules/@angular/cli" ]; then
   mkdir -p "$CACHE/deps"
   cp "$HERE/workspace/package.json" "$HERE/workspace/package-lock.json" "$CACHE/deps/"

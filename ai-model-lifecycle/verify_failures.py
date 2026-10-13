@@ -21,6 +21,7 @@ Usage (Postgres running, Docker available):
     python verify_failures.py --pair haiku-4.5-vs-5.5            # latest complete run
     python verify_failures.py --pair haiku-4.5-vs-5.5 --run 20261009T154316Z
     python verify_failures.py --all-pairs --repeat 3             # also check stability
+    python verify_failures.py --pair haiku-4.5-vs-5.5 --suite real    # the real-project suite
 """
 
 from __future__ import annotations
@@ -107,6 +108,25 @@ def _evidence(case_id: str, sr, psql_outputs: list[str]) -> list[str]:
     if case_id.startswith("r4") and d.get("plan"):
         scans = [ln.strip() for ln in str(d["plan"]).splitlines() if "Scan" in ln][:4]
         ev.append("plan: " + " | ".join(scans))
+    if d.get("edit_failures"):                            # real suite: SEARCH text that did not match
+        ev.append(f"edits that did not apply: {d['edit_failures'][:3]}")
+    if case_id.startswith("r1b"):
+        if d.get("javax_hits"):
+            ev.append(f"javax left: {d['javax_hits'][:3]}")
+        if d.get("build_errors"):
+            ev.append("build: " + " | ".join(ln[:200] for ln in d["build_errors"][:4]))
+        for k in ("maven", "tests_run", "e2e", "e2e_tests"):
+            if d.get(k):
+                ev.append(f"{k}: {d[k]}")
+        return list(dict.fromkeys(ev))
+    if case_id.startswith("r2"):
+        for k in ("cache", "parity", "parity_tests"):
+            if d.get(k):
+                ev.append(f"{k}: {d[k]}")
+        if not sr.checks.get("build", True) and d.get("build_tail"):
+            errs = [ln.strip() for ln in d["build_tail"].splitlines() if "ERROR" in ln or "error TS" in ln][:4]
+            ev.append("ng build: " + " | ".join(ln[:200] for ln in errs))
+        return list(dict.fromkeys(ev))
     if case_id.startswith("r1"):
         for k in ("compile_tail", "test_tail", "hidden_test_tail"):
             if d.get(k) and ("ERROR" in d[k] or "FAIL" in d[k]):
@@ -164,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pair", help="pair id (e.g. haiku-4.5-vs-5.5)")
     ap.add_argument("--all-pairs", action="store_true")
     ap.add_argument("--run", help="run id; default: the latest complete run (same as report.py)")
+    ap.add_argument("--suite", default=None,
+                    help="case suite from models.yaml: sanity (default) or a name under `suites:` such as real")
     ap.add_argument("--repeat", type=int, default=1,
                     help="score each failing answer N times to spot flaky checks (default 1)")
     args = ap.parse_args(argv)
@@ -171,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("give --pair <id> or --all-pairs")
 
     load_env()
-    cfg = load_config()
+    cfg = load_config(suite=args.suite)
     pair_ids = [p.id for p in cfg.pairs] if args.all_pairs else [args.pair]
     any_harness = False
     for pid in pair_ids:

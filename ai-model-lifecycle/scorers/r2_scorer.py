@@ -33,7 +33,6 @@ import json
 import os
 import shutil
 import socket
-import subprocess
 import sys
 import tempfile
 import time
@@ -42,6 +41,7 @@ import uuid
 from pathlib import Path
 
 from .base import ScoreResult, apply_output, cache_dir, cli, parse_edits, parse_files
+from .base import run_command as _run
 
 CASE_ID = "r2_gwt_to_angular"
 CASE_DIR = Path(__file__).resolve().parent.parent / "cases" / CASE_ID
@@ -54,17 +54,6 @@ FIXED_FILES = ("package.json", "package-lock.json", "angular.json", "tsconfig.js
                "tsconfig.app.json", "src/main.ts", "src/index.html")
 MIN_PARITY = 8
 BUILD_TIMEOUT_S, PARITY_TIMEOUT_S = 900, 900
-
-
-def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 900,
-         env: dict[str, str] | None = None) -> tuple[int, str]:
-    try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
-        return p.returncode, (p.stdout or "") + (p.stderr or "")
-    except FileNotFoundError:
-        return 127, f"command not found: {cmd[0]}"
-    except subprocess.TimeoutExpired:
-        return 124, f"timeout after {timeout}s: {' '.join(cmd[:6])} ..."
 
 
 def cache_problem() -> str | None:

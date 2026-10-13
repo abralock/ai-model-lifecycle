@@ -30,14 +30,15 @@ import os
 import re
 import shutil
 import socket
-import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 
 from .base import ScoreResult, apply_output, cache_dir, cli, parse_edits, parse_files
+from .base import run_command as _run
 
 CASE_ID = "r1b_jhipster_boot3"
 CASE_DIR = Path(__file__).resolve().parent.parent / "cases" / CASE_ID
@@ -59,17 +60,6 @@ _COMMENT_LINE_RE = re.compile(r"^\s*(//|/\*|\*)")
 _SUMMARY_RE = re.compile(r"^\[(?:INFO|WARNING|ERROR)\] Tests run: (\d+), Failures: (\d+), Errors: (\d+), "
                          r"Skipped: (\d+)\s*$", re.MULTILINE)
 _CYPRESS_TOTAL_RE = re.compile(r"(?:All specs passed!|\d+ of \d+ failed \(\d+%\))\s+[\d:]+\s+(\d+)\s+(\d+)\s+(\d+|-)")
-
-
-def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 900,
-         env: dict[str, str] | None = None) -> tuple[int, str]:
-    try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
-        return p.returncode, (p.stdout or "") + (p.stderr or "")
-    except FileNotFoundError:
-        return 127, f"command not found: {cmd[0]}"
-    except subprocess.TimeoutExpired:
-        return 124, f"timeout after {timeout}s: {' '.join(cmd[:6])} ..."
 
 
 def _mvn(project: Path, *args: str) -> list[str]:
@@ -138,12 +128,24 @@ def _wait_http(url: str, timeout_s: int) -> bool:
     return False
 
 
+def http_status(url: str) -> int | None:
+    """Status code of a GET (errors included), or None if nothing answered."""
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:  # noqa: S310 - local probe
+            return r.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except Exception:
+        return None
+
+
 def run_e2e(project: Path, res: ScoreResult) -> bool:
     """Package the jar with the prebuilt frontend, start it, run the Cypress suite."""
     static = FRONTEND / "target" / "classes" / "static"
     if not (static / "index.html").is_file() or not (FRONTEND / "node_modules" / ".bin" / "cypress").exists():
         res.details["e2e"] = f"e2e cache missing at {FRONTEND}; run cases/{CASE_ID}/setup_e2e.sh (UNVERIFIED)"
         return False
+    _reclaim(project)   # `verify` ran as root in Docker: target/ is root's until we take it back
     shutil.copytree(static, project / "target" / "classes" / "static", dirs_exist_ok=True)
     rc, out = _run(_mvn(project, "-P-webapp", "-DskipTests", "-Dcheckstyle.skip", "-Dmodernizer.skip",
                         "-Djacoco.skip", "package"), timeout=BUILD_TIMEOUT_S)
@@ -165,6 +167,13 @@ def run_e2e(project: Path, res: ScoreResult) -> bool:
             _, logs = _run(["docker", "logs", "--tail", "60", name])
             res.details["e2e"] = "app did not become healthy within 240s"
             res.details["e2e_tail"] = logs[-1500:]
+            return False
+        # Every spec starts with cy.visit('/'), which needs a 2xx. If the app does not serve
+        # the frontend, all 54 tests fail anyway, slowly (each waits out its timeouts, then
+        # retries twice), and the run outlasts E2E_TIMEOUT_S: fail now with the real reason.
+        status = http_status(f"http://127.0.0.1:{port}/")
+        if status != 200:
+            res.details["e2e"] = f"GET / returned {status}: the app does not serve the frontend (Cypress not run)"
             return False
         env = dict(os.environ, CYPRESS_baseUrl=f"http://localhost:{port}/", NO_COLOR="1")
         rc, out = _run(["npx", "cypress", "run", "--e2e", "--browser", "chrome",

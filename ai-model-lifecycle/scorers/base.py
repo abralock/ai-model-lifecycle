@@ -288,6 +288,45 @@ def write_files(files: dict[str, str], dest: Path) -> list[str]:
     return written
 
 
+def run_command(cmd: list[str], cwd: Path | None = None, timeout: int = 900,
+                env: dict[str, str] | None = None) -> tuple[int, str]:
+    """Run `cmd`, return (exit code, stdout+stderr). Never raises.
+
+    Output goes to a temp file, not a pipe: a browser helper that Cypress or
+    Playwright leaves behind keeps an inherited pipe open, so waiting for the
+    pipe to close hung for the whole timeout after the tests had finished. We
+    wait for the process itself, then kill its process group to clear such
+    stragglers. On timeout the output so far is kept (it shows where it got
+    stuck); exit code 124 = timeout, 127 = command not found.
+    """
+    import os
+    import signal
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as log:
+        try:
+            proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+        except FileNotFoundError:
+            return 127, f"command not found: {cmd[0]}"
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            rc = 124
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            proc.wait()
+        log.seek(0)
+        out = log.read()
+    if rc == 124:
+        out += f"\ntimeout after {timeout}s: {' '.join(cmd[:6])} ..."
+    return rc, out
+
+
 def cache_dir() -> Path:
     """Where real-suite scorers keep large, re-creatable inputs (frontends, app builds).
 

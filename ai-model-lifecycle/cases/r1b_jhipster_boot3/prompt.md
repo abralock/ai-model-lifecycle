@@ -22,7 +22,9 @@ Boot 3 as well, including the JHipster framework libraries (`tech.jhipster`).
    `UserResourceIT`, `BankAccountResourceIT`, `LabelResourceIT`,
    `OperationResourceIT`, `UserJWTControllerIT`, `ExceptionTranslatorIT`,
    `MailServiceIT`, `UserServiceIT`, `HibernateTimeZoneIT`, `ClientForwardControllerTest`,
-   `TechnicalStructureTest` (ArchUnit) and `WebConfigurerTest`.
+   `TechnicalStructureTest` (ArchUnit) and `WebConfigurerTest`. The suite
+   uses the ArchUnit 1.x API (`layeredArchitecture().consideringAllDependencies()`),
+   so the project's test dependencies must provide it.
 3. The REST API keeps its behavior: same endpoints, same security rules, same
    JWT login, same JSON bodies, and the same problem (error) response format.
    The unchanged Angular frontend and its Cypress end-to-end suite are run

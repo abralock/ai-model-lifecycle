@@ -10,6 +10,7 @@ config, dispatch, the EDIT format and the scorers' output parsers.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -190,6 +191,24 @@ def test_r1b_javax_check_ignores_comments_and_unmoved_packages(tmp_path):
     )
     assert [h.split(": ", 1)[1] for h in r1b_scorer.javax_hits(tmp_path)] == [
         "import javax.annotation.PostConstruct;", "import javax.persistence.Entity;"]
+
+
+def test_r1b_reference_answer_passes_the_static_checks(tmp_path):
+    """The known-good answer (tests/r1b_reference_answer.txt) applies cleanly and
+    clears every check before the build. Its build and test stages run in
+    tests/test_r1b_reference_slow.py (GATE1_SLOW_TESTS=1)."""
+    answer = (Path(__file__).parent / "r1b_reference_answer.txt").read_text(encoding="utf-8")
+    shutil.copytree(r1b_scorer.PROJECT, tmp_path, dirs_exist_ok=True)
+    applied = apply_output(answer, tmp_path, strip_prefix="project/")
+    assert applied.edit_failures == []
+    pom = (tmp_path / "pom.xml").read_text(encoding="utf-8")
+    assert r1b_scorer.boot_version(pom).startswith("3.") and r1b_scorer.java_version(pom) == 17
+    assert r1b_scorer.javax_hits(tmp_path) == []
+    # the three hand fixes from cases/r1b_jhipster_boot3/NEAR_MISS.md are in place
+    assert "<artifactId>jackson-datatype-problem</artifactId>" in pom
+    sec = (tmp_path / "src/main/java/io/github/jhipster/sample/config/SecurityConfiguration.java").read_text()
+    assert sec.index(".frameOptions(") < sec.index(".permissionsPolicy(")
+    assert "queue-size" not in (tmp_path / "src/main/resources/config/application-dev.yml").read_text()
 
 
 def test_r1b_no_blocks_fails_without_building():

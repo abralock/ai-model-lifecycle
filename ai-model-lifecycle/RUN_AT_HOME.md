@@ -103,7 +103,7 @@ docker compose -f docker/docker-compose.yml up -d
 pytest -q
 ```
 
-Expected: **`79 passed`** (the number may grow) and **nothing skipped**.
+Expected: **`104 passed`** (the number may grow) and **nothing skipped**.
 
 | You see | Meaning | Fix |
 |---|---|---|
@@ -293,7 +293,7 @@ git push
 ```bash
 source .venv/bin/activate
 docker compose -f docker/docker-compose.yml up -d
-pytest -q                                              # 79 passed, 0 skipped
+pytest -q                                              # 104 passed, 0 skipped
 python report.py --list-runs                           # pairs and runs
 python runner.py --pair <pair> --repeats 3             # run
 python report.py --pair <pair>                         # scorecard → runs/<pair>/REPORT.md

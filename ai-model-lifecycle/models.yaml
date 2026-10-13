@@ -63,3 +63,17 @@ cases:
   - r3_oracle_to_postgres
   - r4_schema_load_optimize
   - r5_etl_dashboard
+
+# Other case suites, picked with `--suite <name>` (runner.py / report.py).
+# Each suite's keys other than `cases` override `defaults` for its runs; its
+# scorecard is runs/<pair>/REPORT.<name>.md.
+suites:
+  # Real open-source projects (whole codebase in the prompt, ~50-120k tokens).
+  real:
+    # 32k cut answers short: Haiku 5.5 used 28.9k on r2 alone (2026-10-13).
+    # 64k is the highest output Haiku 4.5 allows on Bedrock; the others allow 128k.
+    max_tokens: 64000
+    timeout_s: 900
+    cases:
+      - r1b_jhipster_boot3
+      - r2_gwt_to_angular

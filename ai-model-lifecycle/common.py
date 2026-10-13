@@ -61,11 +61,23 @@ class Pair:
     provider_set: bool = False
 
 
+DEFAULT_SUITE = "sanity"
+
+
 @dataclass
 class Config:
     pairs: list[Pair] = field(default_factory=list)
     defaults: dict[str, Any] = field(default_factory=dict)
     cases: list[str] = field(default_factory=list)
+    # Which case suite `cases` holds: "sanity" (the top-level `cases:` list) or
+    # a name under `suites:` in models.yaml (see load_config).
+    suite: str = DEFAULT_SUITE
+    suites: list[str] = field(default_factory=list)
+
+    @property
+    def report_name(self) -> str:
+        """Scorecard filename for this suite: REPORT.md for sanity, else REPORT.<suite>.md."""
+        return "REPORT.md" if self.suite == DEFAULT_SUITE else f"REPORT.{self.suite}.md"
 
     @property
     def temperature(self) -> float:
@@ -115,8 +127,14 @@ class Config:
         return list(self.cases)
 
 
-def load_config(path: Path | str | None = None) -> Config:
-    """Parse models.yaml into a Config."""
+def load_config(path: Path | str | None = None, suite: str | None = None) -> Config:
+    """Parse models.yaml into a Config.
+
+    `suite` picks the case list: None or "sanity" -> the top-level `cases:`;
+    any other name -> `suites.<name>.cases`, with that suite's other keys
+    (e.g. max_tokens, timeout_s) overriding `defaults`. Everything downstream
+    reads `cfg.cases` / `cfg.defaults`, so it needs no suite awareness.
+    """
     path = Path(path) if path else (REPO_ROOT / "models.yaml")
     with open(path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
@@ -132,10 +150,23 @@ def load_config(path: Path | str | None = None) -> Config:
                 provider_set="provider" in entry,
             )
         )
+    suites: dict[str, Any] = raw.get("suites", {}) or {}
+    defaults = dict(raw.get("defaults", {}) or {})
+    cases = list(raw.get("cases", []) or [])
+    suite = suite or DEFAULT_SUITE
+    if suite != DEFAULT_SUITE:
+        if suite not in suites:
+            known = ", ".join([DEFAULT_SUITE, *suites])
+            raise KeyError(f"suite not found in models.yaml: {suite!r} (known: {known})")
+        overrides = dict(suites[suite] or {})
+        cases = list(overrides.pop("cases", []) or [])
+        defaults.update(overrides)
     return Config(
         pairs=pairs,
-        defaults=raw.get("defaults", {}) or {},
-        cases=list(raw.get("cases", []) or []),
+        defaults=defaults,
+        cases=cases,
+        suite=suite,
+        suites=[DEFAULT_SUITE, *suites],
     )
 
 

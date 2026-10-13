@@ -221,12 +221,24 @@ def missing_cases(cfg: Config, runs: list[dict]) -> list[str]:
     return sorted(c for c in cfg.cases if not {(c, "current"), (c, "target")} <= have)
 
 
+def suite_run_ids(cfg: Config, pair_id: str) -> list[str]:
+    """Run ids holding at least one case of cfg's suite, oldest first.
+
+    Each runner invocation runs one suite, so a run of another suite (e.g. a
+    `--suite real` run, seen from the sanity report) is not a partial run of
+    this one and is left out entirely.
+    """
+    wanted = set(cfg.cases)
+    return [rid for rid in list_runs(pair_id)
+            if any(r.get("case_id") in wanted for r in load_runs(pair_id, run=rid))]
+
+
 def pick_run(cfg: Config, pair_id: str) -> tuple[str | None, list[str]]:
     """The latest complete run id, plus the newer partial run ids skipped for it.
 
     No complete run at all -> the latest run (its header then flags it partial).
     """
-    ids = list_runs(pair_id)
+    ids = suite_run_ids(cfg, pair_id)
     skipped: list[str] = []
     for rid in reversed(ids):
         if not missing_cases(cfg, load_runs(pair_id, run=rid)):
@@ -254,7 +266,8 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     tgt = aggs.get((pair.target.id, "target"))
 
     lines: list[str] = []
-    lines.append(f"# Gate 1 Scorecard — {pair.id}\n")
+    title = pair.id if cfg.suite == "sanity" else f"{pair.id} · {cfg.suite} suite"
+    lines.append(f"# Gate 1 Scorecard — {title}\n")
     lines.append(f"> Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}  ")
     lines.append(f"> Current: **{pair.current.name}** (`{pair.current.id}`)  ")
     lines.append(f"> Target: **{pair.target.name}** (`{pair.target.id}`)  ")
@@ -428,13 +441,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--run", "--date", dest="run",
                     help="run id to score (e.g. 20261009T143005Z, or a legacy run's YYYYMMDD); "
                          "default: the latest complete run")
+    ap.add_argument("--suite", default=None,
+                    help="case suite from models.yaml: sanity (default; writes REPORT.md) or a "
+                         "name under `suites:` (writes REPORT.<suite>.md)")
     ap.add_argument("--list-runs", action="store_true", help="list the run ids per pair and exit")
     ap.add_argument("--no-score", action="store_true",
                     help="use runner ok-flag instead of live scorers (fast/offline)")
     args = ap.parse_args(argv)
 
     load_env()
-    cfg = load_config()
+    cfg = load_config(suite=args.suite)
 
     if args.all_pairs:
         pair_ids = [p.id for p in cfg.pairs]
@@ -445,8 +461,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list_runs:
         for pid in pair_ids:
-            print(f"{pid}:")
-            for rid in list_runs(pid):
+            print(f"{pid}:  (suite: {cfg.suite})")
+            for rid in suite_run_ids(cfg, pid):
                 recs = load_runs(pid, run=rid)
                 miss = missing_cases(cfg, recs)
                 note = f"partial, missing {', '.join(miss)}" if miss else "complete"
@@ -459,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         runs = load_runs(pid, run=run) if run else []
         aggs = aggregate(runs, score=score)
         md = render_pair(cfg, pid, aggs, runs, score, skipped)
-        out = RUNS_DIR / pid / "REPORT.md"
+        out = RUNS_DIR / pid / cfg.report_name
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(md, encoding="utf-8")
         print(f"wrote {out}  ({len(runs)} runs)")

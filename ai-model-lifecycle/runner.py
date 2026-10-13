@@ -57,6 +57,23 @@ INLINE_ARTIFACTS: dict[str, list[str]] = {
     ],
     "r4_schema_load_optimize": ["schema.sql", "target_query.sql"],
     "r5_etl_dashboard": ["etl_spec.md", "dashboard_schema.sql"],
+    # --- real suite (real open-source projects; see cases/<id>/README.md) ---
+    "r1b_jhipster_boot3": [
+        "project/pom.xml",
+        "project/src/main/java/**/*.java",
+        "project/src/main/resources/config/*.yml",
+        "project/src/main/resources/logback-spring.xml",
+    ],
+    "r2_gwt_to_angular": [
+        "gwt/**/*",
+        "e2e/**/*",
+        "workspace/package.json",
+        "workspace/angular.json",
+        "workspace/tsconfig.json",
+        "workspace/src/main.ts",
+        "workspace/src/index.html",
+        "workspace/src/styles.css",
+    ],
 }
 
 SYSTEM_PROMPT = (
@@ -78,6 +95,7 @@ class RunResult:
     role: str                       # "current" | "target"
     temperature: float
     max_tokens: int
+    suite: str = "sanity"           # case suite from models.yaml (common.load_config)
     rep: int = 0                    # repeat index (0-based) within one --repeats run
     run_id: str = ""                # one id per runner invocation (see common.new_run_id)
     # --- usage ---
@@ -134,8 +152,12 @@ def build_prompt(case_id: str) -> str:
     for rel in inlines:
         f = cd / rel
         if f.is_file():
+            try:
+                body = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue  # binary (e.g. a TLS keystore): it stays in the project, not the prompt
             lang = rel.rsplit(".", 1)[-1]
-            parts.append(f"\n--- ARTIFACT: {rel} ---\n```{lang}\n{f.read_text(encoding='utf-8').rstrip()}\n```")
+            parts.append(f"\n--- ARTIFACT: {rel} ---\n```{lang}\n{body.rstrip()}\n```")
 
     # Always attach a file listing so the model knows the full case shape.
     listing = _dir_listing(cd)
@@ -356,6 +378,7 @@ def run_case(
         model_slug=model.id,
         model_name=model.name,
         role=role,
+        suite=cfg.suite,
         rep=rep,
         run_id=run_id,
         temperature=cfg.temperature,
@@ -398,7 +421,7 @@ def run_pair(
                                run_id=run_id)
                 status = "OK" if res.ok else f"FAIL ({res.error})"
                 tag = f" [rep {rep+1}/{repeats}]" if repeats > 1 else ""
-                print(f"[{pair_id}] {role:7s} {model.name:20s} {case_id:24s} "
+                print(f"[{pair_id}] {role:7s} {model.name:20s} {case_id:26s} "
                       f"{res.latency_s:7.2f}s{tag}  {status}", file=sys.stderr)
                 if res.ok:
                     results.append(res)
@@ -412,7 +435,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Gate 1 model evaluation harness")
     ap.add_argument("--pair", help="pair id from models.yaml (e.g. opus-4.8-vs-5.5)")
     ap.add_argument("--all-pairs", action="store_true", help="run every pair in models.yaml")
-    ap.add_argument("--case", help="run a single case id (default: all cases for the pair)")
+    ap.add_argument("--suite", default=None,
+                    help="case suite from models.yaml: sanity (default, the top-level `cases:`) "
+                         "or a name under `suites:` such as real")
+    ap.add_argument("--case", help="run a single case id (default: all cases of the suite)")
     ap.add_argument("--repeats", type=int, default=1, metavar="N",
                     help="run each (model, case) N times to capture latency/cost variance")
     ap.add_argument("--dry-run", action="store_true",
@@ -420,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     load_env()
-    cfg = load_config()
+    cfg = load_config(suite=args.suite)
 
     if args.all_pairs:
         pair_ids = [p.id for p in cfg.pairs]
@@ -430,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("pass --pair <id> or --all-pairs")
 
     run_id = new_run_id()
-    print(f"run id: {run_id}", file=sys.stderr)
+    print(f"run id: {run_id}  suite: {cfg.suite}", file=sys.stderr)
     for pid in pair_ids:
         run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats,
                  run_id=run_id)

@@ -21,6 +21,9 @@ SCORER_MAP: dict[str, str] = {
     "r3_oracle_to_postgres": "scorers.r3_scorer",
     "r4_schema_load_optimize": "scorers.r4_scorer",
     "r5_etl_dashboard": "scorers.r5_scorer",
+    # real suite (models.yaml `suites: real`)
+    "r1b_jhipster_boot3": "scorers.r1b_scorer",
+    "r2_gwt_to_angular": "scorers.r2_scorer",
 }
 
 

@@ -147,6 +147,129 @@ def parse_deletes(output_text: str) -> list[str]:
     return [m.group("path").strip().strip("`").strip() for m in _DELETE_RE.finditer(output_text or "")]
 
 
+# --------------------------------------------------------------------------- #
+# `### EDIT: path` + SEARCH/REPLACE blocks (for cases too big to re-emit)       #
+# --------------------------------------------------------------------------- #
+_EDIT_RE = re.compile(r"^#{1,4}\s*EDIT:\s*(?P<path>.+?)\s*$", re.MULTILINE)
+_ANY_HEADER_RE = re.compile(r"^#{1,4}\s*(FILE|EDIT|DELETE):", re.MULTILINE)
+_SR_RE = re.compile(
+    r"^<{5,9} SEARCH[^\n]*\n(?P<search>.*?)^={5,9}[ \t]*\n(?P<replace>.*?)^>{5,9} REPLACE[^\n]*$",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+@dataclass
+class Edit:
+    path: str
+    search: str
+    replace: str
+
+
+def parse_edits(output_text: str) -> list[Edit]:
+    """Extract SEARCH/REPLACE edits from `### EDIT: <path>` sections, in order.
+
+    A section runs from its header to the next FILE/EDIT/DELETE header (or the
+    end); fences inside it are ignored. Each block is
+
+        <<<<<<< SEARCH
+        exact existing lines
+        =======
+        replacement lines
+        >>>>>>> REPLACE
+    """
+    text = output_text or ""
+    edits: list[Edit] = []
+    for m in _EDIT_RE.finditer(text):
+        nxt = _ANY_HEADER_RE.search(text, m.end())
+        section = text[m.end(): nxt.start() if nxt else len(text)]
+        path = m.group("path").strip().strip("`").strip()
+        for b in _SR_RE.finditer(section):
+            edits.append(Edit(path, b.group("search"), b.group("replace")))
+    return edits
+
+
+def _strip_trailing_ws(s: str) -> str:
+    return "\n".join(line.rstrip() for line in s.replace("\r\n", "\n").split("\n"))
+
+
+def apply_edits(edits: list[Edit], dest: Path) -> tuple[list[str], list[str]]:
+    """Apply edits to files under `dest`, in order. Returns (applied, failures).
+
+    The SEARCH text must occur in the file; the first occurrence is replaced.
+    Matching is exact, except that trailing whitespace and CRLF line endings
+    are ignored. An empty SEARCH on a missing file creates it. Paths that
+    escape `dest` are refused like any other failure.
+    """
+    dest = dest.resolve()
+    applied: list[str] = []
+    failures: list[str] = []
+    for e in edits:
+        target = (dest / e.path).resolve()
+        if not str(target).startswith(str(dest)):
+            failures.append(f"{e.path}: path escapes the project")
+            continue
+        if not target.is_file():
+            if e.search.strip():
+                failures.append(f"{e.path}: file not found")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(e.replace, encoding="utf-8")
+            applied.append(e.path)
+            continue
+        body = target.read_text(encoding="utf-8")
+        if e.search and e.search in body:
+            target.write_text(body.replace(e.search, e.replace, 1), encoding="utf-8")
+            applied.append(e.path)
+            continue
+        norm_body, norm_search = _strip_trailing_ws(body), _strip_trailing_ws(e.search)
+        if norm_search.strip() and norm_search in norm_body:
+            target.write_text(norm_body.replace(norm_search, _strip_trailing_ws(e.replace), 1),
+                              encoding="utf-8")
+            applied.append(e.path)
+            continue
+        first = next((ln for ln in e.search.splitlines() if ln.strip()), "")[:80]
+        failures.append(f"{e.path}: SEARCH text not found (starts {first!r})")
+    return applied, failures
+
+
+@dataclass
+class AppliedOutput:
+    written: list[str] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)
+    edited: list[str] = field(default_factory=list)
+    edit_failures: list[str] = field(default_factory=list)
+
+    @property
+    def touched(self) -> bool:
+        return bool(self.written or self.deleted or self.edited or self.edit_failures)
+
+
+def apply_output(output_text: str, dest: Path, strip_prefix: str = "") -> AppliedOutput:
+    """Apply a model answer to the project copied at `dest`: DELETEs, then FILEs, then EDITs.
+
+    `strip_prefix` drops a leading folder a model may have copied from the case
+    listing (e.g. "project/") so `project/pom.xml` and `pom.xml` mean the same.
+    """
+    def norm(p: str) -> str:
+        p = p.strip()
+        if p.startswith("./"):
+            p = p[2:]
+        return p[len(strip_prefix):] if strip_prefix and p.startswith(strip_prefix) else p
+
+    out = AppliedOutput()
+    dest_r = dest.resolve()
+    for rel in parse_deletes(output_text):
+        target = (dest_r / norm(rel)).resolve()
+        if str(target).startswith(str(dest_r)) and target.is_file():
+            target.unlink()
+            out.deleted.append(norm(rel))
+    files = {norm(k): v for k, v in parse_files(output_text).items()}
+    out.written = write_files(files, dest)
+    edits = [Edit(norm(e.path), e.search, e.replace) for e in parse_edits(output_text)]
+    out.edited, out.edit_failures = apply_edits(edits, dest)
+    return out
+
+
 def write_files(files: dict[str, str], dest: Path) -> list[str]:
     """Write parsed files under `dest`, guarding against path traversal.
 
@@ -163,6 +286,57 @@ def write_files(files: dict[str, str], dest: Path) -> list[str]:
         target.write_text(body, encoding="utf-8")
         written.append(rel)
     return written
+
+
+def run_command(cmd: list[str], cwd: Path | None = None, timeout: int = 900,
+                env: dict[str, str] | None = None) -> tuple[int, str]:
+    """Run `cmd`, return (exit code, stdout+stderr). Never raises.
+
+    Output goes to a temp file, not a pipe: a browser helper that Cypress or
+    Playwright leaves behind keeps an inherited pipe open, so waiting for the
+    pipe to close hung for the whole timeout after the tests had finished. We
+    wait for the process itself, then kill its process group to clear such
+    stragglers. On timeout the output so far is kept (it shows where it got
+    stuck); exit code 124 = timeout, 127 = command not found.
+    """
+    import os
+    import signal
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as log:
+        try:
+            proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+        except FileNotFoundError:
+            return 127, f"command not found: {cmd[0]}"
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            rc = 124
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            proc.wait()
+        log.seek(0)
+        out = log.read()
+    if rc == 124:
+        out += f"\ntimeout after {timeout}s: {' '.join(cmd[:6])} ..."
+    return rc, out
+
+
+def cache_dir() -> Path:
+    """Where real-suite scorers keep large, re-creatable inputs (frontends, app builds).
+
+    $GATE1_CACHE, else ~/.cache/ai-model-lifecycle. Kept outside the repo on
+    purpose: it holds node_modules and build output, gigabytes that git (and
+    some synced folders) should never see.
+    """
+    import os
+
+    return Path(os.environ.get("GATE1_CACHE") or Path.home() / ".cache" / "ai-model-lifecycle")
 
 
 # --------------------------------------------------------------------------- #

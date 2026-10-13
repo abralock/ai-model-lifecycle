@@ -87,6 +87,12 @@ class Config:
     def max_tokens(self) -> int:
         return int(self.defaults.get("max_tokens", 8192))
 
+    def max_tokens_for(self, model_id: str) -> int:
+        """Output limit for one model: `max_tokens_by_model` (for models that
+        allow less than the suite's limit), else `max_tokens`."""
+        per_model = self.defaults.get("max_tokens_by_model") or {}
+        return int(per_model.get(model_id, self.max_tokens))
+
     @property
     def timeout_s(self) -> int:
         return int(self.defaults.get("timeout_s", 600))

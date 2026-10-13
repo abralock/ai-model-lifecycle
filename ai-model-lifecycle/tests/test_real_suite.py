@@ -29,8 +29,10 @@ REAL = load_config(suite="real")
 def test_real_suite_config():
     assert REAL.suite == "real"
     assert REAL.cases == ["r1b_jhipster_boot3", "r2_gwt_to_angular"]
-    assert REAL.max_tokens == 64000          # suite override; sanity keeps 32000
-    assert REAL.timeout_s == 900
+    assert REAL.max_tokens == 128000         # suite override; sanity keeps 32000
+    assert REAL.max_tokens_for("anthropic/claude-haiku-4.5") == 64000      # its Bedrock maximum
+    assert REAL.max_tokens_for("anthropic/claude-sonnet-5.5") == 128000
+    assert REAL.timeout_s == 1800
     assert REAL.report_name == "REPORT.real.md"
     sanity = load_config()
     assert sanity.suite == "sanity" and sanity.report_name == "REPORT.md"
@@ -321,12 +323,17 @@ def test_call_sends_thinking_budget_and_records_thinking_tokens(tmp_path, monkey
     pair = REAL.get_pair("haiku-4.5-vs-5.5")
     res = runner.run_case(REAL, pair.id, "r2_gwt_to_angular", pair.target, "target", run_id="20261013T000000Z")
     assert calls[0]["extra_body"]["reasoning"] == {"effort": "medium"}
-    assert calls[0]["max_tokens"] == 64000
+    assert calls[0]["max_tokens"] == 128000                              # Haiku 5.5 (target)
+    assert res.max_tokens == 128000
     assert res.reasoning_requested == {"effort": "medium"} and res.reasoning_tokens == 700
+
+    runner.run_case(REAL, pair.id, "r2_gwt_to_angular", pair.current, "current", run_id="20261013T000002Z")
+    assert calls[1]["max_tokens"] == 64000                               # Haiku 4.5: its maximum
 
     sanity = load_config()
     runner.run_case(sanity, pair.id, "r3_oracle_to_postgres", pair.target, "target", run_id="20261013T000001Z")
-    assert "reasoning" not in calls[1]["extra_body"]                     # default behavior untouched
+    assert "reasoning" not in calls[2]["extra_body"]                     # default behavior untouched
+    assert calls[2]["max_tokens"] == 32000
 
 
 def test_report_shows_thinking_budget_and_tokens():
@@ -336,10 +343,13 @@ def test_report_shows_thinking_budget_and_tokens():
             "billed_cost_usd": 0.1, "provider": "Amazon Bedrock", "_run": "20261013T000000Z",
             "reasoning_requested": {"effort": "medium"}}
     pair = REAL.get_pair("haiku-4.5-vs-5.5")
-    runs = [dict(base, role="current", model_slug=pair.current.id, output_tokens=100, reasoning_tokens=0),
-            dict(base, role="target", model_slug=pair.target.id, output_tokens=900, reasoning_tokens=700)]
+    runs = [dict(base, role="current", model_slug=pair.current.id, output_tokens=100, reasoning_tokens=0,
+                 max_tokens=64000),
+            dict(base, role="target", model_slug=pair.target.id, output_tokens=900, reasoning_tokens=700,
+                 max_tokens=128000)]
     md = report.render_pair(REAL, pair.id, report.aggregate(runs, score=False), runs, score=False)
     assert '> Thinking budget sent: {"effort": "medium"}' in md
+    assert "> Output limit (max_tokens): current 64,000 · target 128,000" in md
     assert "| · of which thinking | 0 | 700 |" in md
 
 

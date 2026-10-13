@@ -70,10 +70,14 @@ cases:
 suites:
   # Real open-source projects (whole codebase in the prompt, ~50-120k tokens).
   real:
-    # 32k cut answers short: Haiku 5.5 used 28.9k on r2 alone (2026-10-13).
-    # 64k is the highest output Haiku 4.5 allows on Bedrock; the others allow 128k.
-    max_tokens: 64000
-    timeout_s: 900
+    # Output limit per call, thinking included. 32k cut answers short (Haiku
+    # 5.5 used 28.9k on r2 alone), and at 64k Sonnet 5.5 thought through the
+    # whole limit on all three r1b answers (run 20261013T081118Z). So: 128k,
+    # the most every model allows on Bedrock except Haiku 4.5 (64k).
+    max_tokens: 128000
+    max_tokens_by_model:
+      anthropic/claude-haiku-4.5: 64000
+    timeout_s: 1800        # a 128k answer takes ~15-18 min at ~120 tokens/s
     # Thinking (hidden reasoning) shares max_tokens with the answer. By default
     # Sonnet 5 thought through all 64k on r1b and answered nothing, or only part
     # (run 20261013T062754Z). A thinking budget ({max_tokens: 16000}) was not

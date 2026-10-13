@@ -281,6 +281,12 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     if missing:
         lines.append(f"> ⚠️ **Partial run** — missing cases: {', '.join(missing)}. "
                      f"Not a full Gate 1 scorecard.  ")
+    limits = {role: sorted({r.get("max_tokens") for r in runs if r.get("role") == role and r.get("max_tokens")})
+              for role in ("current", "target")}
+    if runs and any(limits.values()):
+        fmt = lambda v: "/".join(f"{x:,}" for x in v) or "—"
+        lines.append(f"> Output limit (max_tokens): current {fmt(limits['current'])} · "
+                     f"target {fmt(limits['target'])}  ")
     thinking = {json.dumps(r.get("reasoning_requested"), sort_keys=True) for r in runs}
     if thinking != {"null"} and runs:
         lines.append(f"> Thinking budget sent: {', '.join(sorted(thinking))} (models.yaml `reasoning`)  ")

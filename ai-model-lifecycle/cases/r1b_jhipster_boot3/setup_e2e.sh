@@ -8,13 +8,18 @@
 # Needs: git, Node 16.17+ / npm, Google Chrome (Cypress runs with --browser chrome).
 set -euo pipefail
 
-TAG=v7.9.3
+# Our fork of jhipster/jhipster-sample-app, at tag v7.9.3's commit (a fork has
+# no tags, so pin the commit; it is the one in cases/sources.lock.json).
+REPO=https://github.com/abralock/jhipster-sample-app
+COMMIT=7d39dfaa9edeae5ba8322bb44b7d7487764ef934
 CACHE="${GATE1_CACHE:-$HOME/.cache/ai-model-lifecycle}/r1b_jhipster_boot3"
 DIR="$CACHE/frontend"
 
 mkdir -p "$CACHE"
 if [ ! -d "$DIR/.git" ]; then
-  git clone --quiet --depth 1 --branch "$TAG" https://github.com/jhipster/jhipster-sample-app "$DIR"
+  git init --quiet "$DIR"
+  git -C "$DIR" fetch --quiet --depth 1 "$REPO" "$COMMIT"
+  git -C "$DIR" checkout --quiet FETCH_HEAD
 fi
 cd "$DIR"
 [ -x node_modules/.bin/cypress ] || npm ci --no-audit --no-fund

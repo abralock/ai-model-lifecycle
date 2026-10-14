@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-time setup for the R2 scorer (re-run is a no-op). Builds, outside git:
 #   $GATE1_CACHE/r2_gwt_to_angular/    (default GATE1_CACHE: ~/.cache/ai-model-lifecycle)
-#     carstore-war/  the original GWT app (GWTP-Samples carstore @ 7dce06a), GWT-compiled
+#     carstore-war/  the original GWT app (our GWTP-Samples fork, carstore @ 7dce06a), GWT-compiled
 #                    with debug ids on; it also serves the REST API the Angular port calls
 #     gae-sdk/       App Engine Java SDK 1.9.17, whose dev server runs that war
 #     deps/          node_modules for the fixed Angular 18 workspace (workspace/package-lock.json)
@@ -12,7 +12,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CACHE="${GATE1_CACHE:-$HOME/.cache/ai-model-lifecycle}/r2_gwt_to_angular"
-COMMIT=7dce06a                       # last carstore on a released GWTP (1.5); HEAD needs 2.0-SNAPSHOT
+REPO=https://github.com/abralock/GWTP-Samples                # our fork of ArcBees/GWTP-Samples
+COMMIT=7dce06a479529944de10eab06b9b38d2e944926d   # last carstore on a released GWTP (1.5); HEAD needs 2.0-SNAPSHOT
 NODE_IMAGE=node:20.18.0-bookworm-slim
 JAVA8_IMAGE=maven:3.8-openjdk-8
 mkdir -p "$CACHE"
@@ -26,7 +27,7 @@ fi
 
 if [ ! -f "$CACHE/carstore-war/CarStore.html" ]; then
   SRC="$CACHE/src/GWTP-Samples"
-  [ -d "$SRC/.git" ] || git clone --quiet https://github.com/ArcBees/GWTP-Samples "$SRC"
+  [ -d "$SRC/.git" ] || git clone --quiet "$REPO" "$SRC"
   git -C "$SRC" checkout --quiet "$COMMIT"
   # integration-test profile = the IntegrationTesting GWT module, which keeps the
   # debug ids (id="gwt-debug-...") the parity suite selects on

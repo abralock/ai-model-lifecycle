@@ -1,9 +1,9 @@
 """scorers/r2_scorer.py — real-project GWT → Angular migration (GWTP carstore).
 
 The input is three screens of the GWTP "carstore" sample (ArcBees/GWTP-Samples
-@ 7dce06a, GWT 2.7): Manufacturers (list + editor popup), Ratings (list +
-create form) and Reports (average rating per manufacturer), frozen under
-cases/r2_gwt_to_angular/gwt/. The model writes an Angular 18 app into the
+@ 7dce06a, GWT 2.7, via our fork abralock/GWTP-Samples): Manufacturers (list + editor popup), Ratings (list +
+create form) and Reports (average rating per manufacturer), fetched into
+cases/r2_gwt_to_angular/gwt/ by cases/sources.py. The model writes an Angular 18 app into the
 fixed workspace (cases/r2_gwt_to_angular/workspace/), as FILE / EDIT blocks
 under src/app/. Then:
 

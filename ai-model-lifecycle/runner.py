@@ -32,6 +32,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from cases import sources
 from common import (
     Config,
     ModelRef,
@@ -126,10 +127,15 @@ class RunResult:
 # --------------------------------------------------------------------------- #
 # Prompt assembly                                                              #
 # --------------------------------------------------------------------------- #
+# Notes about a case written after its runs (not task input) stay out of the
+# listing, so adding one never changes the prompt the committed runs used.
+_NOT_LISTED = {"prompt.md", "NEAR_MISS.md"}
+
+
 def _dir_listing(d: Path, limit: int = 200) -> str:
     files: list[str] = []
     for p in sorted(d.rglob("*")):
-        if p.is_file() and p.name != "prompt.md":
+        if p.is_file() and p.name not in _NOT_LISTED:
             files.append(str(p.relative_to(d)))
         if len(files) >= limit:
             break
@@ -137,7 +143,11 @@ def _dir_listing(d: Path, limit: int = 200) -> str:
 
 
 def build_prompt(case_id: str) -> str:
-    """Read cases/<case_id>/prompt.md and inline the case's artifacts."""
+    """Read cases/<case_id>/prompt.md and inline the case's artifacts.
+
+    Real-suite sources are fetched from their forks first (cases/sources.py).
+    """
+    sources.ensure(case_id)
     cd = case_dir(case_id)
     prompt_file = cd / "prompt.md"
     if not prompt_file.is_file():

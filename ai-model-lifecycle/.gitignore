@@ -21,3 +21,9 @@ results/
 .DS_Store
 .idea/
 .vscode/
+
+# Real-suite case sources: fetched from our GitHub forks at a pinned commit
+# (python -m cases.sources; pinned in cases/sources.lock.json)
+cases/r1b_jhipster_boot3/project/
+cases/r2_gwt_to_angular/gwt/
+cases/r2_gwt_to_angular/e2e/

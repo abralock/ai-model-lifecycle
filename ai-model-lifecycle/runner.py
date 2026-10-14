@@ -34,6 +34,7 @@ from typing import Any, NamedTuple
 
 from cases import sources
 from common import (
+    ApiRef,
     Config,
     ModelRef,
     case_dir,
@@ -214,6 +215,7 @@ def _extract_usage(resp: Any) -> tuple[int, int, int, int, int]:
         "prompt_tokens_details.cached_tokens",
         "cache_read_input_tokens",
         "cached_tokens",
+        "prompt_cache_hit_tokens",   # DeepSeek-style cache accounting
     )
     cache_write = g("cache_creation_input_tokens", "cache_write_tokens")
     total = g("total_tokens") or (input_tokens + output_tokens)
@@ -263,15 +265,27 @@ def call_model(
     dry_run: bool = False,
     provider_prefs: dict[str, Any] | None = None,
     reasoning: dict[str, Any] | None = None,
+    api: ApiRef | None = None,
+    session: str | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> CallResult:
-    """Call one model through OpenRouter and return a CallResult.
+    """Call one model and return a CallResult.
 
-    `provider_prefs` (OpenRouter provider routing, e.g. {"order": ["Amazon
-    Bedrock"], "allow_fallbacks": false}) is sent on every request so both
-    models of a pair run on the same provider. Every request also asks
-    OpenRouter to report its billed cost (usage.cost). `reasoning` (OpenRouter's
-    reasoning preferences, e.g. {"max_tokens": 16000}) caps hidden thinking,
-    which otherwise shares max_tokens with the answer.
+    Two routes, picked by `api`:
+    * `api=None` (default) — OpenRouter. `provider_prefs` (OpenRouter provider
+      routing, e.g. {"order": ["Amazon Bedrock"], "allow_fallbacks": false}) is
+      sent on every request so both models of a pair run on the same provider.
+      Every request also asks OpenRouter to report its billed cost (usage.cost).
+      `reasoning` (OpenRouter's reasoning preferences, e.g. {"max_tokens":
+      16000}) caps hidden thinking, which otherwise shares max_tokens with the
+      answer.
+    * `api=<ApiRef>` — a non-OpenRouter gateway from models.yaml `apis:` (e.g.
+      OpenCode Go), spoken to as an OpenAI-compatible chat-completions API
+      (litellm `openai/` + `api_base`). The gateway itself is already a single
+      provider, so no provider pinning, usage-cost request or reasoning
+      preferences are sent (they are OpenRouter-specific extensions). Go asks
+      clients to identify themselves and send a stable session id, which the
+      extra headers do (see https://opencode.ai/v2/docs/console/go).
 
     Retries on 429 / 5xx / transient errors with exponential backoff. Never
     raises for a provider error — returns an `error` string instead so the run
@@ -288,31 +302,57 @@ def call_model(
     except Exception as exc:  # pragma: no cover
         return CallResult(usage, 0, 0.0, "", None, f"litellm import failed: {exc}")
 
-    token = get_openrouter_token()
-    if not token:
-        return CallResult(usage, 0, 0.0, "", None, "OPENROUTER_TOKEN not set (check .env)")
-
     # Some frontier models are reasoning-only and accept a fixed temperature
     # (e.g. Opus 4.8/5.5 only accept temperature=1). Dropping unsupported params
     # lets litellm fall back to each model's default rather than hard-failing.
     litellm.drop_params = True
 
-    extra_body: dict[str, Any] = {"usage": {"include": True}}
-    if provider_prefs:
-        extra_body["provider"] = provider_prefs
-    if reasoning:
-        extra_body["reasoning"] = reasoning
+    served_by: str | None = None     # recorded as RunResult.provider
+    if api is not None:
+        if api.family != "chat":
+            return CallResult(usage, 0, 0.0, "", None,
+                              f"api {api.id!r} has unsupported family {api.family!r} "
+                              "(only 'chat' is wired up)")
+        key = api.key()
+        if not key:
+            return CallResult(usage, 0, 0.0, "", None,
+                              f"{api.api_key_env} not set (check .env)")
+        model_str = model_slug if model_slug.startswith("openai/") else f"openai/{model_slug}"
+        call_kwargs: dict[str, Any] = {
+            "api_base": api.base_url,
+            "api_key": key,
+            "extra_headers": {
+                "User-Agent": "ai-model-lifecycle-gate1/1.0",
+                "x-opencode-session": session or "",
+            },
+        }
+        served_by = api.id
+    else:
+        token = get_openrouter_token()
+        if not token:
+            return CallResult(usage, 0, 0.0, "", None, "OPENROUTER_TOKEN not set (check .env)")
+        # OpenRouter models must use the `openrouter/` prefix so litellm routes
+        # through OpenRouter (honoring api_key) instead of the native Anthropic
+        # provider path (which ignores api_key and looks for ANTHROPIC_API_KEY).
+        model_str = model_slug if model_slug.startswith("openrouter/") else f"openrouter/{model_slug}"
+        extra_body: dict[str, Any] = {"usage": {"include": True}}
+        if provider_prefs:
+            extra_body["provider"] = provider_prefs
+        if reasoning:
+            extra_body["reasoning"] = reasoning
+        call_kwargs = {"api_key": token, "extra_body": extra_body}
+
+    # Per-model extra params from models.yaml (e.g. reasoning_effort for
+    # thinking-only models like GLM-5.x on Go). litellm.drop_params=True drops
+    # them where a provider rejects them.
+    call_kwargs.update(extra_params or {})
 
     last_err: str | None = None
     for attempt in range(1, max_retries + 1):
         t0 = time.time()
         try:
-            # OpenRouter models must use the `openrouter/` prefix so litellm routes
-            # through OpenRouter (honoring api_key) instead of the native Anthropic
-            # provider path (which ignores api_key and looks for ANTHROPIC_API_KEY).
-            router_slug = model_slug if model_slug.startswith("openrouter/") else f"openrouter/{model_slug}"
             resp = litellm.completion(
-                model=router_slug,
+                model=model_str,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
@@ -320,8 +360,7 @@ def call_model(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout=timeout_s,
-                api_key=token,
-                extra_body=extra_body,
+                **call_kwargs,
             )
             latency = time.time() - t0
             i, o, cr, cw, tot = _extract_usage(resp)
@@ -338,7 +377,7 @@ def call_model(
             # `reasoning` block and leave `content` empty. Prefer content,
             # fall back to reasoning so we don't grade an empty string.
             if not text.strip():
-                reasoning = getattr(msg, "reasoning", None)
+                reasoning = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None)
                 psf = getattr(msg, "model_extra", {}) or {}
                 reasoning = reasoning or psf.get("reasoning") or psf.get("reasoning_content")
                 if reasoning:
@@ -347,7 +386,7 @@ def call_model(
             return CallResult(
                 usage, attempt, latency, text, finish_reason,
                 None if text else f"empty completion (finish_reason={finish_reason})",
-                provider=getattr(resp, "provider", None),
+                provider=served_by or getattr(resp, "provider", None),
                 billed_cost_usd=_extract_billed_cost(resp),
                 reasoning_tokens=_extract_reasoning_tokens(resp),
             )
@@ -388,7 +427,10 @@ def run_case(
 ) -> RunResult:
     run_id = run_id or new_run_id()
     prompt = build_prompt(case_id)
-    provider_prefs = cfg.provider_for(pair_id)
+    api = cfg.api_for(model)
+    # OpenRouter provider pinning / reasoning prefs only apply to OpenRouter
+    # models; a gateway like OpenCode Go is already one provider.
+    provider_prefs = cfg.provider_for(pair_id) if api is None else None
     call = call_model(
         model.id,
         prompt,
@@ -399,7 +441,10 @@ def run_case(
         backoff_base_s=cfg.backoff_base_s,
         dry_run=dry_run,
         provider_prefs=provider_prefs,
-        reasoning=cfg.reasoning,
+        reasoning=cfg.reasoning if api is None else None,
+        api=api,
+        session=run_id,
+        extra_params=model.params,
     )
     usage, attempts, latency, text, finish_reason, err = call[:6]
     result = RunResult(

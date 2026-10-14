@@ -44,9 +44,34 @@ def get_openrouter_token() -> str | None:
 # models.yaml                                                                  #
 # --------------------------------------------------------------------------- #
 @dataclass
+class ApiRef:
+    """A non-OpenRouter inference gateway from the top-level `apis:` map in
+    models.yaml (e.g. OpenCode Go, an OpenAI-compatible chat-completions API).
+
+    `family` is the API dialect the gateway speaks for the models we route to
+    it: "chat" (OpenAI chat completions) is the only one wired up so far.
+    """
+
+    id: str
+    base_url: str
+    api_key_env: str = ""
+    family: str = "chat"
+
+    def key(self) -> str | None:
+        """The gateway's API key from the environment (after load_env)."""
+        return os.environ.get(self.api_key_env) if self.api_key_env else None
+
+
+@dataclass
 class ModelRef:
     id: str
     name: str
+    # Key into Config.apis. None (default) = call through OpenRouter.
+    api: str | None = None
+    # Extra request params merged into the completion call (e.g.
+    # {reasoning_effort: low} for thinking-heavy models). Set the same
+    # value on both models of a pair to keep the comparison symmetric.
+    params: dict[str, Any] | None = None
 
 
 @dataclass
@@ -73,6 +98,8 @@ class Config:
     # a name under `suites:` in models.yaml (see load_config).
     suite: str = DEFAULT_SUITE
     suites: list[str] = field(default_factory=list)
+    # Non-OpenRouter gateways, keyed by their id in models.yaml `apis:`.
+    apis: dict[str, ApiRef] = field(default_factory=dict)
 
     @property
     def report_name(self) -> str:
@@ -128,6 +155,23 @@ class Config:
                 return p
         raise KeyError(f"pair id not found in models.yaml: {pair_id!r}")
 
+    def api_for(self, model: ModelRef) -> ApiRef | None:
+        """The gateway a model is called through, or None for OpenRouter.
+
+        A dangling `api:` reference in models.yaml is a config typo — fail
+        loudly here rather than after spending on calls.
+        """
+        if model.api is None:
+            return None
+        try:
+            return self.apis[model.api]
+        except KeyError:
+            known = ", ".join(sorted(self.apis)) or "(none)"
+            raise KeyError(
+                f"model {model.id!r} references unknown api {model.api!r} "
+                f"(known: {known}) — check the `apis:` map in models.yaml"
+            ) from None
+
     def selected_cases(self, only: str | None = None) -> list[str]:
         """Return the case list, optionally narrowed to a single case id.
 
@@ -165,6 +209,10 @@ def load_config(path: Path | str | None = None, suite: str | None = None) -> Con
     suites: dict[str, Any] = raw.get("suites", {}) or {}
     defaults = dict(raw.get("defaults", {}) or {})
     cases = list(raw.get("cases", []) or [])
+    apis = {
+        api_id: ApiRef(id=api_id, **(spec or {}))
+        for api_id, spec in (raw.get("apis", {}) or {}).items()
+    }
     suite = suite or DEFAULT_SUITE
     if suite != DEFAULT_SUITE:
         if suite not in suites:
@@ -179,6 +227,7 @@ def load_config(path: Path | str | None = None, suite: str | None = None) -> Con
         cases=cases,
         suite=suite,
         suites=[DEFAULT_SUITE, *suites],
+        apis=apis,
     )
 
 

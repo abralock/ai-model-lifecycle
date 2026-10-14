@@ -80,6 +80,30 @@ pytest -q
 - R4/R5 run the model's SQL with real `psql` (local, else inside the
   `aidb-postgres` container) in a throwaway schema per run.
 
+## OpenCode Go (open-weight models)
+
+Pairs tagged `api: opencode-go` (e.g. `glm-5.2-vs-5.3`,
+`deepseek-v4.1-flash-vs-v4-pro`) run through an
+[OpenCode Go](https://opencode.ai/v2/docs/console/go) subscription instead of
+OpenRouter. Same cases, scorers, scorecard and overall-score math; the only
+differences:
+
+- **Key:** create it at [opencode.ai/console](https://opencode.ai/console)
+  (subscribe to Go → copy the API key), then set `OPENCODE_GO_API_KEY` in `.env`.
+- **Cost** comes from the `pricing.py` table at Go's list prices — that spend
+  counts against the subscription's monthly quota, it is not marginal billing.
+  The `Cost source` line says `price table (pricing.py)` for these pairs.
+- **Provider pinning does not apply** — Go is one gateway, so both models share
+  its infrastructure by construction. Watch the quota caps (≈20% of the monthly
+  limit per 5 h per model) when running `--repeats 3` across several Go pairs.
+- Only Go's chat-completions models are wired up (`family: chat` in the
+  `apis:` map): GLM, DeepSeek, Kimi, LongCat, MiMo, Hy, Space Bunny. The
+  MiniMax/Qwen3.x (Anthropic-messages) and Grok/GPT-Luna (Responses) families
+  are not.
+
+To add another Go pair, copy an existing one in `models.yaml` and add the
+models' Go list prices to `pricing.py` — no code changes needed.
+
 ## Layout (pilot)
 - `models.yaml` — candidate matrix (pair-agnostic; add pairs to scale to 7)
 - `runner.py` — litellm harness (temp=0, fixed max_tokens, retry/backoff)

@@ -38,6 +38,30 @@ pairs:
 #    current: {id: openai/gpt-5.6-terra, name: "GPT-5.6 Terra"}
 #    target:  {id: openai/gpt-6-terra,   name: "GPT-6 Terra"}
 
+# --- OpenCode Go pairs (open-weight models) -----------------------------------
+# Models with `api: opencode-go` are called through the OpenCode Go
+# subscription (https://opencode.ai/v2/docs/console/go) instead of OpenRouter;
+# the key goes in .env as OPENCODE_GO_API_KEY. No provider pinning: Go is
+# already a single gateway, so both models of a pair share its infrastructure.
+# Token prices for the scorecard come from pricing.py (Go's list prices —
+# they count against the monthly quota; they are not marginal billing).
+  - id: glm-5.2-vs-5.3
+    # GLM-5.x on Go is thinking-ONLY (disabling thinking is rejected upstream,
+    # probed 2026-10-14): left at its default it can burn the whole output
+    # budget on hidden reasoning and return an empty answer (smoke run
+    # 20261014T130723Z: 32k output tokens, finish_reason=length, no content).
+    # reasoning_effort: low caps that; set on BOTH models to stay symmetric.
+    # reasoning_content is returned separately and never graded as the answer.
+    current: {id: glm-5.2, name: "GLM-5.2", api: opencode-go, params: {reasoning_effort: low}}
+    target:  {id: glm-5.3, name: "GLM-5.3", api: opencode-go, params: {reasoning_effort: low}}
+  - id: deepseek-v4.1-flash-vs-v4-pro
+    current: {id: deepseek-v4.1-flash, name: "DeepSeek V4.1 Flash", api: opencode-go}
+    target:  {id: deepseek-v4-pro,     name: "DeepSeek V4 Pro", api: opencode-go}
+#  Other chat-completions models on Go that work with no code change:
+#  kimi-k2.7-code -> kimi-k3, glm-5.3-flash, longcat-2.0, mimo-v2.6-flash/-pro,
+#  hy3, hy4-preview, space-bunny, and the free previews. MiniMax and Qwen3.x
+#  use Go's Anthropic-messages family — not wired up yet (family: chat only).
+
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:
   # OpenRouter provider routing, sent on every call. Pin ONE provider with
@@ -55,6 +79,19 @@ defaults:
   timeout_s: 600
   max_retries: 5
   backoff_base_s: 2      # exponential: base * 2**attempt, honoring Retry-After
+
+# --- Non-OpenRouter gateways ---------------------------------------------------
+# A model with `api: <name>` is called through that gateway instead of
+# OpenRouter. `family: chat` = OpenAI-compatible chat completions (litellm
+# `openai/` + base_url); it is the only family wired up in runner.py so far.
+apis:
+  opencode-go:
+    # OpenCode Go subscription: https://opencode.ai/v2/docs/console/go
+    # Get the key: opencode.ai/console -> subscribe to Go/Go Plus -> copy the
+    # API key (or create a service account key) -> .env OPENCODE_GO_API_KEY.
+    base_url: https://opencode.ai/inference/go/v1
+    api_key_env: OPENCODE_GO_API_KEY
+    family: chat
 
 # Cases enabled for the pilot. Each maps to a directory under cases/.
 # (R2 GWT->Angular and the C/T suites are deferred — see TEST_CASES.md.)

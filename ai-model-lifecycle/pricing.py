@@ -68,6 +68,25 @@ PRICES: dict[str, Price] = {
     "openai/gpt-6-luna": Price(input=2.0, output=8.0),
     "openai/gpt-5.6-terra": Price(input=2.0, output=8.0),
     "openai/gpt-6-terra": Price(input=2.0, output=8.0),
+    # --- OpenCode Go models (models.yaml `apis: opencode-go`) -----------------
+    # Go list prices (https://opencode.ai/v2/docs/console/go, checked
+    # 2026-10-14), keyed by the bare Go model id. These count against the
+    # subscription's monthly quota — they are not marginal billing, so the
+    # cost axis of a Go pair reads "quota spend at list price". Go reports no
+    # cache-write price ("-") -> 0.0.
+    "glm-5.2": Price(input=1.40, output=4.40, cache_read=0.26, cache_write=0.0),
+    "glm-5.3": Price(input=1.40, output=4.40, cache_read=0.26, cache_write=0.0),
+    "glm-5.3-flash": Price(input=0.15, output=0.50, cache_read=0.03, cache_write=0.0),
+    # DeepSeek off-peak prices below; peak hours (01:00-04:00 and 06:00-10:00
+    # UTC, Mon-Fri) are billed 2x by Go and are not modeled here.
+    "deepseek-v4.1-flash": Price(input=0.15, output=0.60, cache_read=0.003, cache_write=0.0),
+    "deepseek-v4-pro": Price(input=0.66, output=1.98, cache_read=0.022, cache_write=0.0),
+    # Other chat-completions models on Go, ready for future pairs:
+    "kimi-k2.7-code": Price(input=0.95, output=4.00, cache_read=0.19, cache_write=0.0),
+    "kimi-k3": Price(input=3.00, output=15.00, cache_read=0.30, cache_write=0.0),
+    "longcat-2.0": Price(input=0.30, output=1.20, cache_read=0.006, cache_write=0.0),
+    "mimo-v2.6-flash": Price(input=0.14, output=0.28, cache_read=0.0028, cache_write=0.0),
+    "mimo-v2.6-pro": Price(input=0.435, output=0.87, cache_read=0.003625, cache_write=0.0),
 }
 
 # NOTE on cache buckets: for the pilot models the OpenRouter catalog snapshot

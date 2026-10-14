@@ -27,6 +27,9 @@ environment active (`source .venv/bin/activate`). Setup from scratch:
 5. **Both models must run on the same provider.** Check `Provider (runs)` in the
    report; otherwise time and cost compare providers, not models.
 6. **Cost must be billed.** `Cost source` should say `billed by OpenRouter (12/12)`.
+   Exception: OpenCode Go pairs (`api: opencode-go` in models.yaml) have no billed
+   cost — `price table (pricing.py)` is correct there (Go list prices, charged
+   against the monthly quota).
 7. **Small samples.** 12 runs per model is rarely statistically significant (the
    report prints Fisher p). Say so; don't call a winner on a 1–2 task difference.
 8. **Secrets and commits.** Never read, print or paste `.env`. Don't commit or push
@@ -79,6 +82,13 @@ trustworthy yet. Known flaky check: R4's index-scan test on borderline answers.
 3. In `pricing.py`, set both models' input/output prices (USD per 1M tokens). It's
    only a fallback when no billed cost is recorded, but keep it right.
 4. `pytest -q`, then the smoke test, then the full run (workflow above).
+
+For an open-weight pair on an **OpenCode Go** subscription instead: give both
+models `api: opencode-go` in models.yaml, put the Console API key in `.env` as
+`OPENCODE_GO_API_KEY`, and add the Go list prices to `pricing.py`. Only
+`family: chat` models (GLM, DeepSeek, Kimi, LongCat, MiMo, Hy, Space Bunny)
+are wired up. Mind the quota caps (~20% of the monthly limit per 5 h per
+model); a 429 from Go is an infra error, not a model failure.
 
 ## Optional: MLflow
 

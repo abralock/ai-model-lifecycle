@@ -78,7 +78,15 @@ same scorers `report.py` uses.
 python mlflow_export.py --all-pairs                        # latest complete run per pair
 python mlflow_export.py --all-pairs --all-runs             # every complete run (history)
 python mlflow_export.py --pair haiku-4.5-vs-5.5 --run 20261009T154316Z
+python mlflow_export.py --all-pairs --suite real           # real-project suite (REPORT.real.md)
 ```
+
+- `--suite real` exports the real-project suite into its own experiments,
+  `Gate1 / <pair> · real`, so its scores never share charts with the sanity
+  suite. Its scorers need the one-time caches first:
+  `cases/r2_gwt_to_angular/setup.sh` and `cases/r1b_jhipster_boot3/setup_e2e.sh`
+  (see each case's scorer). An answer the scorer could not verify is not cached,
+  so after fixing the setup, export again.
 
 - A run already exported for the same `--source` is skipped, so it's safe to
   run again after every new evaluation.
@@ -104,7 +112,7 @@ MLFLOW_TRACKING_URI=<server URI> python mlflow_export.py --all-pairs
 
 | MLflow item | Gate 1 meaning |
 |---|---|
-| Experiment `Gate1 / <pair>` | One model pair |
+| Experiment `Gate1 / <pair>` | One model pair (sanity suite); `Gate1 / <pair> · real` for the real suite |
 | Run `<run id> (<source>)` | One harness run. Metrics: `overall_score`, `fisher_p`, and **`current_*` / `target_*` pairs** for every model metric below (e.g. `current_cost_component` vs `target_cost_component`). Tags: `verdict`, `providers`, `cost_source`, `repeats`. Artifacts: **`comparison.png`** (current in blue vs target in orange: pass rate overall and per task, time, cost, cost per passed task, output tokens), `REPORT.md` and `calls.json` (one row per call). |
 | ↳ Model run `<model> (current/target)` | One model in that run, coloured **blue (current) / orange (target)**. Metrics with the **same names for both models**: `pass_rate`, `passes`, `cost_usd`, `cost_per_task_usd`, `cost_per_passed_task_usd`, `mean_latency_s`, `output_tokens`, `pass_rate_r1` / `r3` / `r4` / `r5` per task, and the score components `quality_component`, `cost_component`, `time_component`, `overall_score` (current = 100). |
 | ↳↳ Call run `<model> · <task> · rep N` | One model call: `passed`, `latency_s`, tokens, `cost_usd`; tags `result` (PASS/FAIL/INFRA) and `failure_reason`; artifact `output.txt` (the model's full answer). |

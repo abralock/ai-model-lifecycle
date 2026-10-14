@@ -146,3 +146,32 @@ def test_overall_score_none_when_a_model_passes_nothing():
     a = report.ModelAgg(model_slug="x", model_name="x", role="current")
     b = report.ModelAgg(model_slug="y", model_name="y", role="target", runs=4, passes=2)
     assert report.overall_score(a, b) is None
+
+
+def test_real_suite_gets_its_own_experiment_and_report(env):
+    real = load_config(suite="real")
+    _write_run(env.runs, real)
+    assert mlflow_export.export_run(mlflow, real, PAIR, RID, "local", env.score) == "loaded"
+    assert mlflow.get_experiment_by_name(f"Gate1 / {PAIR}") is None      # sanity charts untouched
+    exp = mlflow.get_experiment_by_name(f"Gate1 / {PAIR} · real")
+    (parent,) = mlflow.search_runs([exp.experiment_id], output_format="list",
+                                   filter_string="tags.level = 'run'")
+    assert parent.data.tags["suite"] == "real"
+    assert {"current_pass_rate_r1b", "current_pass_rate_r2"} <= set(parent.data.metrics)
+    arts = {a.path for a in mlflow.MlflowClient().list_artifacts(parent.info.run_id)}
+    assert "REPORT.real.md" in arts and "REPORT.md" not in arts
+    # the same run id seen from the sanity suite is not one of its runs
+    assert mlflow_export.export_run(mlflow, env.cfg, PAIR, RID, "local", env.score) == "incomplete"
+
+
+def test_unverified_result_is_not_cached(tmp_path):
+    calls: list = []
+
+    def scorer(case_id, output_text, slug):
+        calls.append(case_id)
+        return SimpleNamespace(passed=False, reason="failed checks: build (unverified: missing cache)")
+
+    cache = mlflow_export.ScoreCache(path=tmp_path / "cache.json", scorer=scorer)
+    assert cache("r2_gwt_to_angular", "answer", "m").passed is False
+    cache("r2_gwt_to_angular", "answer", "m")
+    assert len(calls) == 2 and not (tmp_path / "cache.json").exists()

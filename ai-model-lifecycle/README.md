@@ -94,3 +94,34 @@ pytest -q
 - `docker/` — Postgres 16 for the data cases
 
 Output runs to `runs/<pair_id>/` (committed as the durable record), scorecard at `runs/<pair_id>/REPORT.md`.
+
+## Real-project suite (`--suite real`)
+
+Two cases built from real open-source projects, scored by their own tests;
+scorecard at `runs/<pair_id>/REPORT.real.md`:
+
+| Case | Fetched from (our fork) | Forked from (upstream) | Branch · commit | Task |
+|---|---|---|---|---|
+| `r1b_jhipster_boot3` | [abralock/jhipster-sample-app](https://github.com/abralock/jhipster-sample-app) | [jhipster/jhipster-sample-app](https://github.com/jhipster/jhipster-sample-app) | `main` · [`7d39dfa`](https://github.com/abralock/jhipster-sample-app/tree/7d39dfaa9edeae5ba8322bb44b7d7487764ef934) (tag `v7.9.3`) | Spring Boot 2.7 → 3 |
+| `r2_gwt_to_angular` | [abralock/GWTP-Samples](https://github.com/abralock/GWTP-Samples) | [ArcBees/GWTP-Samples](https://github.com/ArcBees/GWTP-Samples) | `master` · [`7dce06a`](https://github.com/abralock/GWTP-Samples/tree/7dce06a479529944de10eab06b9b38d2e944926d/carstore) (`carstore/`) | GWT → Angular 18 |
+
+The project code is **not committed here**: it is fetched from the forks into
+`cases/r1b_jhipster_boot3/project/` and `cases/r2_gwt_to_angular/{gwt,e2e}/`
+(gitignored). `cases/sources.lock.json` pins each fork's commit and the SHA-256
+of every file used, so a fetch reproduces exactly the prompt the committed runs
+used, and a changed fork is refused. The runner and scorers fetch on first use;
+to fetch or check by hand:
+
+```bash
+python -m cases.sources            # fetch (needs git + network once)
+python -m cases.sources --check    # verify only
+```
+
+The scorers also need one-time caches (Docker, about 3 GB):
+`bash cases/r2_gwt_to_angular/setup.sh` and
+`bash cases/r1b_jhipster_boot3/setup_e2e.sh`. Then:
+
+```bash
+python runner.py --pair sonnet-5-vs-5.5 --suite real --repeats 3
+python report.py --pair sonnet-5-vs-5.5 --suite real
+```

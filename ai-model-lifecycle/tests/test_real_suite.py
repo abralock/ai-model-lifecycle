@@ -9,8 +9,10 @@ config, dispatch, the EDIT format and the scorers' output parsers.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -423,3 +425,55 @@ def test_apply_edits_ignores_indentation_when_unambiguous(tmp_path):
         "<a>\n    gone\n</b>\n".replace("    gone", "gone"))
     from scorers.base import _unique_dedented_match
     assert _unique_dedented_match("<a>\n  <x/>\n</a>\n<b>\n  <x/>\n</b>\n", "<x/>\n") is None   # twice: refused
+
+
+# --------------------------------------------------------------------------- #
+# case sources fetched from the forks (cases/sources.py)                       #
+# --------------------------------------------------------------------------- #
+def test_real_case_sources_are_pinned_forks_and_not_committed():
+    from cases import sources
+
+    lock = sources._lock()
+    assert set(lock) == set(REAL.cases)
+    for case_id, srcs in lock.items():
+        for s in srcs:
+            assert s["repo"].startswith("https://github.com/abralock/")
+            # provenance: the project it was forked from, and the branch of the commit
+            assert s["upstream"].startswith("https://github.com/") and s["branch"]
+            assert s["upstream"].rsplit("/", 1)[1] == s["repo"].rsplit("/", 1)[1]
+            assert len(s["commit"]) == 40                  # a full SHA, not a movable tag/branch
+            tracked = subprocess.run(["git", "ls-files", str(sources.CASES_DIR / case_id / s["to"])],
+                                     capture_output=True, text=True, check=True).stdout
+            assert tracked == "", f"{case_id}/{s['to']} must be fetched, not committed"
+
+
+def test_real_prompts_match_the_committed_runs():
+    """Fetched sources + the runner rebuild exactly the prompt the committed runs
+    were made with, so new runs stay comparable with them."""
+    from common import RUNS_DIR
+
+    for case in REAL.cases:
+        stored = {json.loads(f.read_text())["prompt"]
+                  for f in RUNS_DIR.glob(f"*/*.{case}.20261013T130717Z*.json")}
+        assert len(stored) == 1
+        assert hashlib.sha256(build_prompt(case).encode()).digest() == \
+            hashlib.sha256(stored.pop().encode()).digest()
+
+
+def test_changed_case_source_is_refused(tmp_path, monkeypatch):
+    from cases import sources
+
+    lock = {"c": [{"repo": "x", "commit": "0" * 40, "from": "", "to": "p",
+                   "files": {"a.txt": hashlib.sha256(b"good").hexdigest()}}]}
+    (tmp_path / "sources.lock.json").write_text(json.dumps(lock))
+    monkeypatch.setattr(sources, "CASES_DIR", tmp_path)
+    monkeypatch.setattr(sources, "LOCK_FILE", tmp_path / "sources.lock.json")
+    assert sources.problems("c") == ["missing c/p/a.txt"]
+    (tmp_path / "c" / "p").mkdir(parents=True)
+    (tmp_path / "c" / "p" / "a.txt").write_bytes(b"good")
+    assert sources.problems("c") == []
+    sources.ensure("c")                                    # present and exact: no fetch
+    (tmp_path / "c" / "p" / "a.txt").write_bytes(b"edited")
+    with pytest.raises(sources.SourceError, match="differ from the pinned fork commit"):
+        sources.ensure("c")
+    sources.ensure("not_locked")                           # sanity cases: nothing to do

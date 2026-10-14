@@ -1,7 +1,8 @@
 """scorers/r1b_scorer.py — real-project Spring Boot 2.7 → 3 migration (JHipster sample app).
 
 The input is the backend of jhipster/jhipster-sample-app v7.9.3 (Boot 2.7.3,
-Java 11), frozen under cases/r1b_jhipster_boot3/project/. The model answers
+Java 11), fetched from our fork (abralock/jhipster-sample-app, see
+cases/sources.py) into cases/r1b_jhipster_boot3/project/. The model answers
 with FILE / EDIT / DELETE blocks, applied on top of a copy of that project.
 Then, in order (a failed stage fails every later one):
 
@@ -36,6 +37,8 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+
+from cases import sources
 
 from .base import ScoreResult, apply_output, cache_dir, cli, parse_edits, parse_files
 from .base import run_command as _run
@@ -197,6 +200,7 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
     tmp = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="r1b_"))
     tmp.mkdir(parents=True, exist_ok=True)
     try:
+        sources.ensure(CASE_ID)                 # fetched from the fork, see cases/sources.py
         shutil.copytree(PROJECT, tmp, dirs_exist_ok=True)
         applied = apply_output(output_text, tmp, strip_prefix="project/")
         res.details.update(files_written=applied.written, files_deleted=applied.deleted,

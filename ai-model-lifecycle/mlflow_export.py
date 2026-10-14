@@ -6,19 +6,19 @@ side-by-side compare.
 
 Layout in MLflow:
 
-  experiment   "Gate1 / <pair>"
+  experiment   "Gate1 / <pair>" (sanity suite), "Gate1 / <pair> · <suite>" (e.g. real)
     run          one per harness run id, e.g. "20261009T154316Z (local)"
-        tags       level=run, harness_run_id, source, models, verdict, providers, cost_source
+        tags       level=run, harness_run_id, source, suite, models, verdict, providers, cost_source
         metrics    overall_score, fisher_p, and current_<m> / target_<m> pairs for every
                    model metric below (e.g. current_cost_component vs target_cost_component)
         artifacts  comparison.png (current blue vs target orange: pass rate overall
                    and per task, time, cost, cost per pass, output tokens),
-                   REPORT.md (rendered by report.py), calls.json (one row per call)
+                   REPORT.md / REPORT.<suite>.md (rendered by report.py), calls.json (one row per call)
       model run    one per model, "<model> (current|target)", tag level=model,
                    mlflow.runColor blue (current) / orange (target)
         metrics    pass_rate, passes, scored_runs, cost_usd, cost_per_task_usd,
                    cost_per_passed_task_usd, mean_latency_s, output_tokens,
-                   infra_errors, pass_rate_r1/r3/r4/r5, quality/cost/time_component
+                   infra_errors, pass_rate_<task> (r1/r3/r4/r5, real: r1b/r2), quality/cost/time_component
                    and overall_score (current = 100)
                    (same names for both models, so each MLflow chart compares them)
         call run   one per model call (task x repeat), tag level=call
@@ -28,8 +28,11 @@ Layout in MLflow:
           artifact   output.txt (the model's answer)
 
 Pass/fail comes from the same scorers report.py uses (Postgres + Docker Maven
-needed). Results are cached in .mlflow_score_cache.json, keyed by the answer and
-the scorer source, so re-exports are fast and a scorer change re-scores.
+needed; the real suite also needs the caches built by its cases' setup scripts).
+Results are cached in .mlflow_score_cache.json, keyed by the answer and the
+scorer source, so re-exports are fast and a scorer change re-scores. A result
+the scorer could not verify (missing Docker, Postgres or setup cache) is never
+cached, so fixing the setup and exporting again scores it for real.
 A run already exported for the same source is skipped.
 
 Usage:
@@ -38,6 +41,7 @@ Usage:
     python mlflow_export.py --all-pairs                 # latest complete run per pair
     python mlflow_export.py --all-pairs --all-runs      # every complete run
     python mlflow_export.py --pair haiku-4.5-vs-5.5 --run 20261009T154316Z
+    python mlflow_export.py --all-pairs --suite real    # the real-project suite (REPORT.real.md)
     open http://127.0.0.1:5050
 
 The server is MLFLOW_TRACKING_URI (default http://127.0.0.1:5050).
@@ -57,6 +61,7 @@ import common
 import report
 from common import load_config, load_env
 from scorers.dispatch import score_case as _score_case
+from verify_failures import _HARNESS_PATTERNS
 
 DEFAULT_TRACKING_URI = "http://127.0.0.1:5050"
 HARNESS_DIR = Path(__file__).resolve().parent
@@ -82,12 +87,17 @@ class ScoreCache:
 
     def __call__(self, case_id: str, output_text: str, slug: str):
         key = hashlib.sha256(f"{self.fp}\0{case_id}\0{output_text}".encode()).hexdigest()
-        if key not in self.data:
-            sr = self.scorer(case_id, output_text, slug)
-            self.data[key] = {"passed": bool(sr.passed), "reason": sr.reason or ""}
+        if key in self.data:
+            return SimpleNamespace(**self.data[key])
+        sr = self.scorer(case_id, output_text, slug)
+        result = {"passed": bool(sr.passed), "reason": sr.reason or ""}
+        # a harness failure (unverified, scorer crash) says nothing about the
+        # answer: keep it out of the cache so a fixed setup re-scores it
+        if not _HARNESS_PATTERNS.search(result["reason"]):
+            self.data[key] = result
             if self.path:
                 self.path.write_text(json.dumps(self.data))
-        return SimpleNamespace(**self.data[key])
+        return SimpleNamespace(**result)
 
 
 def _short(slug: str) -> str:
@@ -215,13 +225,21 @@ def score_components(ov) -> dict[str, dict[str, float]]:
                        "time_component": ov.time, "overall_score": ov.overall}}
 
 
+def experiment_name(cfg, pair_id: str) -> str:
+    """'Gate1 / <pair>' for the sanity suite, 'Gate1 / <pair> · <suite>' for another
+    suite, so the two suites' scores never share charts."""
+    if cfg.suite == common.DEFAULT_SUITE:
+        return f"Gate1 / {pair_id}"
+    return f"Gate1 / {pair_id} · {cfg.suite}"
+
+
 def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
-    """Export one harness run; returns 'loaded', 'exists' or 'incomplete'."""
+    """Export one harness run of cfg's suite; returns 'loaded', 'exists' or 'incomplete'."""
     runs = common.load_runs(pair_id, run=rid)
     if not runs or report.missing_cases(cfg, runs):
         return "incomplete"
 
-    exp_name = f"Gate1 / {pair_id}"
+    exp_name = experiment_name(cfg, pair_id)
     mlflow.set_experiment(exp_name)
     exp = mlflow.get_experiment_by_name(exp_name)
     hit = mlflow.search_runs([exp.experiment_id], output_format="list",
@@ -238,7 +256,7 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
     tgt = aggs[(pair.target.id, "target")]
     ov = report.overall_score(cur, tgt)
 
-    common_tags = {"harness_run_id": rid, "pair": pair_id, "source": source}
+    common_tags = {"harness_run_id": rid, "pair": pair_id, "source": source, "suite": cfg.suite}
     with mlflow.start_run(run_name=f"{rid} ({source})"):
         mlflow.set_tags({
             **common_tags, "level": "run",
@@ -258,7 +276,7 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
         # current_X / target_X pairs, e.g. current_cost_component vs target_cost_component
         for role, a in (("current", cur), ("target", tgt)):
             mlflow.log_metrics({f"{role}_{k}": v for k, v in model_metrics(a, comps[role]).items()})
-        mlflow.log_text(md, "REPORT.md")
+        mlflow.log_text(md, cfg.report_name)
         fig = comparison_figure(pair, rid, cur, tgt, ov)
         mlflow.log_figure(fig, "comparison.png")
         _plt().close(fig)
@@ -312,6 +330,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--run", help="one run id; default: the latest complete run")
     ap.add_argument("--all-runs", action="store_true", help="export every complete run")
     ap.add_argument("--runs-dir", help="read runs from another runs/ folder (e.g. a teammate's checkout)")
+    ap.add_argument("--suite", default=None,
+                    help="case suite from models.yaml: sanity (default) or a name under `suites:` "
+                         "such as real; each suite gets its own experiments")
     ap.add_argument("--source", default="local",
                     help="label for where the runs came from, shown as tag 'source' (default: local)")
     args = ap.parse_args(argv)
@@ -329,14 +350,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.runs_dir:
         common.RUNS_DIR = Path(args.runs_dir).resolve()
 
-    cfg = load_config()
+    cfg = load_config(suite=args.suite)
     pair_ids = [args.pair] if args.pair and not args.all_pairs else [p.id for p in cfg.pairs]
     score = ScoreCache()
     for pid in pair_ids:
         if args.run:
             rids = [args.run]
         elif args.all_runs:
-            rids = common.list_runs(pid)
+            rids = report.suite_run_ids(cfg, pid)     # leaves out other suites' runs
         else:
             rid, _ = report.pick_run(cfg, pid)
             rids = [rid] if rid else []

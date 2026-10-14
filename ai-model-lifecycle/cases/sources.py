@@ -8,8 +8,9 @@ files the case uses are copied into the case folder (gitignored):
     r2_gwt_to_angular/gwt/        abralock/GWTP-Samples @ 7dce06a (carstore client + shared)
     r2_gwt_to_angular/e2e/        the same commit (carstore Cucumber features + page objects)
 
-`sources.lock.json` (next to this file) lists, per case, the fork, the full
-commit and every file with its SHA-256. A fetch that does not reproduce those
+`sources.lock.json` (next to this file) lists, per case, the fork (`repo`),
+the project it was forked from (`upstream`), the branch the pinned commit is on,
+the full commit and every file with its SHA-256. A fetch that does not reproduce those
 bytes fails, so a changed fork can never silently change a task. Same files,
 same place: the prompt the runner builds is the one the committed runs used.
 

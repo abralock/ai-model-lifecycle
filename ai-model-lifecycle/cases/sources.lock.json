@@ -2,6 +2,8 @@
   "r1b_jhipster_boot3": [
     {
       "repo": "https://github.com/abralock/jhipster-sample-app",
+      "upstream": "https://github.com/jhipster/jhipster-sample-app",
+      "branch": "main",
       "commit": "7d39dfaa9edeae5ba8322bb44b7d7487764ef934",
       "ref": "v7.9.3",
       "from": "",
@@ -132,6 +134,8 @@
   "r2_gwt_to_angular": [
     {
       "repo": "https://github.com/abralock/GWTP-Samples",
+      "upstream": "https://github.com/ArcBees/GWTP-Samples",
+      "branch": "master",
       "commit": "7dce06a479529944de10eab06b9b38d2e944926d",
       "ref": "7dce06a",
       "from": "carstore/src/main/java",
@@ -206,6 +210,8 @@
     },
     {
       "repo": "https://github.com/abralock/GWTP-Samples",
+      "upstream": "https://github.com/ArcBees/GWTP-Samples",
+      "branch": "master",
       "commit": "7dce06a479529944de10eab06b9b38d2e944926d",
       "ref": "7dce06a",
       "from": "carstore/src/test/java",
@@ -227,6 +233,8 @@
     },
     {
       "repo": "https://github.com/abralock/GWTP-Samples",
+      "upstream": "https://github.com/ArcBees/GWTP-Samples",
+      "branch": "master",
       "commit": "7dce06a479529944de10eab06b9b38d2e944926d",
       "ref": "7dce06a",
       "from": "carstore/src/test/resources",

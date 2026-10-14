@@ -438,6 +438,9 @@ def test_real_case_sources_are_pinned_forks_and_not_committed():
     for case_id, srcs in lock.items():
         for s in srcs:
             assert s["repo"].startswith("https://github.com/abralock/")
+            # provenance: the project it was forked from, and the branch of the commit
+            assert s["upstream"].startswith("https://github.com/") and s["branch"]
+            assert s["upstream"].rsplit("/", 1)[1] == s["repo"].rsplit("/", 1)[1]
             assert len(s["commit"]) == 40                  # a full SHA, not a movable tag/branch
             tracked = subprocess.run(["git", "ls-files", str(sources.CASES_DIR / case_id / s["to"])],
                                      capture_output=True, text=True, check=True).stdout

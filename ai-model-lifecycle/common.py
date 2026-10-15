@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,8 +49,11 @@ class ApiRef:
     models.yaml (e.g. OpenCode Go, an OpenAI-compatible chat-completions API).
 
     `family` is the API dialect the gateway speaks for the models we route to
-    it: "chat" (OpenAI chat completions) or "responses" (OpenAI Responses API —
-    Go serves GPT Luna / Grok / Muse Spark only at `/v1/responses`).
+    it: "chat" (OpenAI chat completions), "responses" (OpenAI Responses API —
+    Go serves GPT Luna / Grok / Muse Spark only at `/v1/responses`), or
+    "messages" (Anthropic messages API — Go's MiniMax / Qwen3.x). A model may
+    override it with its own `family:` (ModelRef.family) when one gateway
+    serves different models over different dialects.
     """
 
     id: str
@@ -73,6 +76,11 @@ class ModelRef:
     # {reasoning_effort: low} for thinking-heavy models). Set the same
     # value on both models of a pair to keep the comparison symmetric.
     params: dict[str, Any] | None = None
+    # Dialect override for the gateway (e.g. `family: messages` on one model
+    # whose gateway entry defaults to chat). None = use the gateway's family.
+    # Lets one gateway (one provider string) serve models over different
+    # dialects, so a pair can mix e.g. a messages-API model with a chat one.
+    family: str | None = None
 
 
 @dataclass
@@ -85,6 +93,9 @@ class Pair:
     # explicit `provider: null` turns pinning off for the pair.
     provider: dict[str, Any] | None = None
     provider_set: bool = False
+    # Per-pair call timeout floor (slow gateways/models need more than
+    # defaults.timeout_s; a suite demanding more still wins). None = default.
+    timeout_s: int | None = None
 
 
 DEFAULT_SUITE = "sanity"
@@ -125,6 +136,14 @@ class Config:
     def timeout_s(self) -> int:
         return int(self.defaults.get("timeout_s", 600))
 
+    def timeout_s_for(self, pair_id: str) -> int:
+        """Call timeout for a pair: never below its own `timeout_s` floor (slow
+        gateways/models), but a suite may still demand more (real: 1800s)."""
+        pair = self.get_pair(pair_id)
+        if pair.timeout_s:
+            return max(self.timeout_s, int(pair.timeout_s))
+        return self.timeout_s
+
     @property
     def max_retries(self) -> int:
         return int(self.defaults.get("max_retries", 5))
@@ -160,18 +179,22 @@ class Config:
         """The gateway a model is called through, or None for OpenRouter.
 
         A dangling `api:` reference in models.yaml is a config typo — fail
-        loudly here rather than after spending on calls.
+        loudly here rather than after spending on calls. A model-level
+        `family:` overrides the gateway's dialect for that model.
         """
         if model.api is None:
             return None
         try:
-            return self.apis[model.api]
+            api = self.apis[model.api]
         except KeyError:
             known = ", ".join(sorted(self.apis)) or "(none)"
             raise KeyError(
                 f"model {model.id!r} references unknown api {model.api!r} "
                 f"(known: {known}) — check the `apis:` map in models.yaml"
             ) from None
+        if model.family:
+            api = replace(api, family=model.family)
+        return api
 
     def selected_cases(self, only: str | None = None) -> list[str]:
         """Return the case list, optionally narrowed to a single case id.
@@ -205,6 +228,7 @@ def load_config(path: Path | str | None = None, suite: str | None = None) -> Con
                 target=ModelRef(**entry["target"]),
                 provider=entry.get("provider"),
                 provider_set="provider" in entry,
+                timeout_s=entry.get("timeout_s"),
             )
         )
     suites: dict[str, Any] = raw.get("suites", {}) or {}

@@ -453,16 +453,15 @@ def call_model(
                 finish_reason = _responses_finish_reason(resp)
             else:
                 msg = resp.choices[0].message
+                # Only `content` is the answer. Hidden thinking (`reasoning` /
+                # `reasoning_content`) is never graded, same as the Responses
+                # route: a model that spends its whole budget thinking has no
+                # answer and is recorded as an empty completion (a FAIL in
+                # report.py). Grading the thinking scored Qwen3.8 Flash on 120k+
+                # characters of it (tests/test_reasoning_not_graded.py).
                 text = msg.content or ""
-                # Reasoning models (Opus 4.8/5.5) may return the answer in the
-                # `reasoning` block and leave `content` empty. Prefer content,
-                # fall back to reasoning so we don't grade an empty string.
                 if not text.strip():
-                    reasoning = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None)
-                    psf = getattr(msg, "model_extra", {}) or {}
-                    reasoning = reasoning or psf.get("reasoning") or psf.get("reasoning_content")
-                    if reasoning:
-                        text = reasoning if isinstance(reasoning, str) else str(reasoning)
+                    text = ""
                 finish_reason = getattr(resp.choices[0], "finish_reason", None)
             return CallResult(
                 usage, attempt, latency, text, finish_reason,

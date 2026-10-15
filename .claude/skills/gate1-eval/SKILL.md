@@ -86,9 +86,11 @@ trustworthy yet. Known flaky check: R4's index-scan test on borderline answers.
 For an open-weight pair on an **OpenCode Go** subscription instead: give both
 models `api: opencode-go` in models.yaml, put the Console API key in `.env` as
 `OPENCODE_GO_API_KEY`, and add the Go list prices to `pricing.py`. Wired-up
-families: `family: chat` (GLM, DeepSeek, Kimi, LongCat, MiMo, Hy, Space Bunny)
-and `family: responses` via `api: opencode-go-responses` (GPT Luna; Grok and
-Muse Spark share that endpoint). Mind the quota caps (~20% of the monthly limit per 5 h per
+families: `family: chat` (GLM, DeepSeek, Kimi, LongCat, MiMo, Hy, Space Bunny),
+`family: responses` via `api: opencode-go-responses` (GPT Luna; Grok and
+Muse Spark share that endpoint), and `family: messages` as a model-level
+override on `api: opencode-go` (Qwen3.x; MiniMax shares that dialect).
+Mind the quota caps (~20% of the monthly limit per 5 h per
 model); a 429 from Go is an infra error, not a model failure.
 
 ## Optional: MLflow

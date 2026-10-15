@@ -100,8 +100,9 @@ differences:
   `apis:` map): GLM, DeepSeek, Kimi, LongCat, MiMo, Hy, Space Bunny. So is
   the Responses API family (`family: responses`, via the
   `opencode-go-responses` gateway entry): GPT Luna (pair
-  `gpt-5.6-luna-vs-6-luna`); Grok and Muse Spark share that endpoint. The
-  MiniMax/Qwen3.x (Anthropic-messages) family is not wired up.
+  `gpt-5.6-luna-vs-6-luna`); Grok and Muse Spark share that endpoint. And the
+  Anthropic-messages family via a model-level `family: messages` override
+  (pair `qwen3.8-flash-vs-glm-5.3-flash`); MiniMax shares that dialect.
 
 To add another Go pair, copy an existing one in `models.yaml` and add the
 models' Go list prices to `pricing.py` — no code changes needed.

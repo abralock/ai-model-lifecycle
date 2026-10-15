@@ -330,9 +330,10 @@ def call_model(
       answer.
     * `api=<ApiRef>` — a non-OpenRouter gateway from models.yaml `apis:` (e.g.
       OpenCode Go). `family: chat` speaks OpenAI chat completions, `family:
-      responses` speaks the OpenAI Responses API (litellm `openai/` +
-      `api_base`; Go serves GPT Luna / Grok / Muse Spark only at
-      `/v1/responses`). The gateway itself is already a single
+      responses` speaks the OpenAI Responses API (Go serves GPT Luna / Grok /
+      Muse Spark only at `/v1/responses`), `family: messages` speaks the
+      Anthropic messages API (Go's MiniMax / Qwen3.x at `/v1/messages`).
+      The gateway itself is already a single
       provider, so no provider pinning, usage-cost request or reasoning
       preferences are sent (they are OpenRouter-specific extensions). Go asks
       clients to identify themselves and send a stable session id, which the
@@ -360,17 +361,26 @@ def call_model(
 
     served_by: str | None = None     # recorded as RunResult.provider
     if api is not None:
-        if api.family not in ("chat", "responses"):
+        if api.family not in ("chat", "responses", "messages"):
             return CallResult(usage, 0, 0.0, "", None,
                               f"api {api.id!r} has unsupported family {api.family!r} "
-                              "(wired up: 'chat', 'responses')")
+                              "(wired up: 'chat', 'responses', 'messages')")
         key = api.key()
         if not key:
             return CallResult(usage, 0, 0.0, "", None,
                               f"{api.api_key_env} not set (check .env)")
-        model_str = model_slug if model_slug.startswith("openai/") else f"openai/{model_slug}"
+        # chat/responses speak OpenAI dialects (litellm `openai/`); messages is
+        # the Anthropic messages API (litellm `anthropic/` — it posts to
+        # {api_base}/messages and normalizes the reply back to choices/message).
+        prefix = "anthropic/" if api.family == "messages" else "openai/"
+        model_str = model_slug if model_slug.startswith(prefix) else f"{prefix}{model_slug}"
+        base = api.base_url
+        if api.family == "messages" and base.rstrip("/").endswith("/v1"):
+            # The Anthropic SDK appends /v1/messages to base_url itself, so the
+            # gateway's .../v1 must be trimmed or the call 404s on /v1/v1/messages.
+            base = base.rstrip("/")[: -len("/v1")]
         call_kwargs: dict[str, Any] = {
-            "api_base": api.base_url,
+            "api_base": base,
             "api_key": key,
             "extra_headers": {
                 "User-Agent": "ai-model-lifecycle-gate1/1.0",
@@ -502,17 +512,18 @@ def run_case(
     # OpenRouter provider pinning / reasoning prefs only apply to OpenRouter
     # models; a gateway like OpenCode Go is already one provider.
     provider_prefs = cfg.provider_for(pair_id) if api is None else None
+    reasoning_prefs = cfg.reasoning if api is None else None
     call = call_model(
         model.id,
         prompt,
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens_for(model.id),
-        timeout_s=cfg.timeout_s,
+        timeout_s=cfg.timeout_s_for(pair_id),
         max_retries=cfg.max_retries,
         backoff_base_s=cfg.backoff_base_s,
         dry_run=dry_run,
         provider_prefs=provider_prefs,
-        reasoning=cfg.reasoning if api is None else None,
+        reasoning=reasoning_prefs,
         api=api,
         session=run_id,
         extra_params=model.params,
@@ -538,7 +549,7 @@ def run_case(
         error=err,
         created_at=time.time(),
         provider_requested=provider_prefs,
-        reasoning_requested=cfg.reasoning,
+        reasoning_requested=reasoning_prefs,
         reasoning_tokens=call.reasoning_tokens,
         provider=call.provider,
         billed_cost_usd=call.billed_cost_usd,

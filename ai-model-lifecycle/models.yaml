@@ -64,11 +64,29 @@ pairs:
   - id: gpt-5.6-luna-vs-6-luna
     current: {id: gpt-5.6-luna, name: "GPT-5.6 Luna", api: opencode-go-responses}
     target:  {id: gpt-6-luna,   name: "GPT-6 Luna",   api: opencode-go-responses}
+  # Cross-vendor flash comparison (current = Qwen, target = GLM). Qwen3.x on
+  # Go is served ONLY over the Anthropic messages API (/v1/messages); GLM is
+  # chat completions. A model-level `family: messages` override keeps both on
+  # the opencode-go gateway, so the report's Provider line stays one gateway
+  # (Go's infrastructure either way). GLM-5.x on Go is thinking-only — cap at
+  # reasoning_effort: low; set on both to stay symmetric (dropped where the
+  # messages route rejects it).
+  - id: qwen3.8-flash-vs-glm-5.3-flash
+    # Qwen via /messages thinks HEAVILY and ignores every thinking control
+    # (probed 2026-10-15 on r3: budget_tokens=2000 -> 19.5k thinking tokens;
+    # disabled -> 14.6k; none -> 19.2k; ~430-620s/call at ~35 tok/s). No param
+    # helps, so none is sent; the 1200s timeout floor covers its slow calls
+    # (the real suite's 1800s still wins). GLM keeps reasoning_effort: low —
+    # GLM-5.x on Go is thinking-only and otherwise burns the output budget.
+    timeout_s: 1200
+    current: {id: qwen3.8-flash, name: "Qwen3.8 Flash", api: opencode-go, family: messages}
+    target:  {id: glm-5.3-flash, name: "GLM-5.3 Flash", api: opencode-go, params: {reasoning_effort: low}}
 #  Other chat-completions models on Go that work with no code change:
 #  kimi-k2.7-code -> kimi-k3, glm-5.3-flash, longcat-2.0, mimo-v2.6-flash/-pro,
 #  hy3, hy4-preview, space-bunny, and the free previews. Grok and Muse Spark
-#  share Luna's Responses API (api: opencode-go-responses). MiniMax and
-#  Qwen3.x use Go's Anthropic-messages family — not wired up yet.
+#  share Luna's Responses API (api: opencode-go-responses); MiniMax and
+#  Qwen3.x share Qwen's Anthropic-messages dialect (family: messages override,
+#  see the qwen3.8-flash-vs-glm-5.3-flash pair).
 
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:
@@ -129,6 +147,12 @@ suites:
     max_tokens: 128000
     max_tokens_by_model:
       anthropic/claude-haiku-4.5: 64000
+      # Qwen3.8 Flash on Go's messages route thinks until the budget is gone:
+      # at 64k/128k Go's upstream kills the call ("Endpoint is unavailable"
+      # after ~22 min, probed 2026-10-15); at 32k it completes — on r1b as
+      # finish=length (30.8k of 32k spent thinking), i.e. the model cannot
+      # finish r1b on this route. 32k is the only completable setting.
+      qwen3.8-flash: 32000
     timeout_s: 1800        # a 128k answer takes ~15-18 min at ~120 tokens/s
     # Thinking (hidden reasoning) shares max_tokens with the answer. By default
     # Sonnet 5 thought through all 64k on r1b and answered nothing, or only part

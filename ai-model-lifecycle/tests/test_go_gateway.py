@@ -4,9 +4,12 @@ Models with `api: <name>` in models.yaml are called through that gateway
 instead of OpenRouter: no provider pinning, no usage.cost request, the gateway
 id is recorded as the provider, and cost comes from the pricing.py table (Go's
 list prices count against the subscription quota; it does not bill per call).
-Two API dialects are wired up: `family: chat` (OpenAI chat completions — GLM,
-DeepSeek, Kimi, ...) and `family: responses` (OpenAI Responses API — Go serves
-GPT Luna, Grok and Muse Spark only at `/v1/responses`).
+Three API dialects are wired up: `family: chat` (OpenAI chat completions —
+GLM, DeepSeek, Kimi, ...), `family: responses` (OpenAI Responses API — Go
+serves GPT Luna, Grok and Muse Spark only at `/v1/responses`), and
+`family: messages` (Anthropic messages API — Go's Qwen3.x / MiniMax at
+`/v1/messages`). A model-level `family:` override lets one gateway serve a
+mixed-dialect pair while keeping a single provider string.
 
 All offline: litellm is replaced by a fake.
 """
@@ -270,6 +273,70 @@ def test_responses_finish_reason_maps_incomplete():
     resp = {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}
     assert runner._responses_finish_reason(resp) == "max_output_tokens"
     assert runner._responses_finish_reason({"status": "completed"}) == "stop"
+
+
+# --------------------------------------------------------------------------- #
+# family: messages (Qwen3.x / MiniMax on Go — Anthropic messages API)          #
+# --------------------------------------------------------------------------- #
+MESSAGES_PAIR = "qwen3.8-flash-vs-glm-5.3-flash"
+
+
+def test_model_family_override_keeps_gateway(tmp_path):
+    """A model-level `family:` overrides the gateway dialect but not its id —
+    both models of a mixed pair keep the same provider string."""
+    yaml_text = """
+pairs:
+  - id: q
+    current: {id: qwen3.8-flash, name: Q, api: opencode-go, family: messages}
+    target:  {id: glm-5.3-flash, name: G, api: opencode-go}
+apis:
+  opencode-go:
+    base_url: https://opencode.ai/inference/go/v1
+    api_key_env: OPENCODE_GO_API_KEY
+    family: chat
+"""
+    cfg = _cfg(tmp_path, yaml_text)
+    pair = cfg.get_pair("q")
+    cur, tgt = cfg.api_for(pair.current), cfg.api_for(pair.target)
+    assert cur is not None and cur.family == "messages" and cur.id == "opencode-go"
+    assert tgt is not None and tgt.family == "chat" and tgt.id == "opencode-go"
+
+
+def test_go_messages_call_uses_anthropic_route(tmp_path, monkeypatch, fake_litellm):
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    cfg = load_config()
+    pair = cfg.get_pair(MESSAGES_PAIR)
+    res = runner.run_case(cfg, MESSAGES_PAIR, "r3_oracle_to_postgres", pair.current, "current",
+                          run_id="20261015T000000Z")
+
+    sent = fake_litellm.calls[0]
+    # litellm `anthropic/` posts to {api_base}/messages and normalizes the reply
+    assert sent["model"] == "anthropic/qwen3.8-flash"
+    # the Anthropic SDK appends /v1/messages itself — the gateway's /v1 is trimmed
+    assert sent["api_base"] == "https://opencode.ai/inference/go"
+    assert sent["api_key"] == "sk-go-test"
+    assert sent["extra_headers"]["x-opencode-session"] == "20261015T000000Z"
+    assert "extra_body" not in sent
+    # no per-model params for Qwen: Go's messages route ignores thinking
+    # controls (probed 2026-10-15), so nothing is merged into the call
+    assert "thinking" not in sent and "reasoning_effort" not in sent
+
+    assert res.ok and res.provider == "opencode-go"   # same provider string as GLM
+    saved = json.loads(next(tmp_path.rglob("*.json")).read_text())
+    assert saved["provider"] == "opencode-go" and saved["ok"] is True
+
+
+def test_glm_flash_stays_on_chat_route(tmp_path, monkeypatch, fake_litellm):
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    cfg = load_config()
+    pair = cfg.get_pair(MESSAGES_PAIR)
+    res = runner.run_case(cfg, MESSAGES_PAIR, "r3_oracle_to_postgres", pair.target, "target",
+                          run_id="20261015T000000Z")
+    sent = fake_litellm.calls[0]
+    assert sent["model"] == "openai/glm-5.3-flash"
+    # GLM-5.x is thinking-only on Go: cap hidden thinking so it answers
+    assert sent["reasoning_effort"] == "low"
+    assert res.ok and res.provider == "opencode-go"
 
 
 # --------------------------------------------------------------------------- #

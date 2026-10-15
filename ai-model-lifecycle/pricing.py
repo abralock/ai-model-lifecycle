@@ -93,6 +93,9 @@ PRICES: dict[str, Price] = {
     # prompts stay well under 272K.
     "gpt-5.6-luna": Price(input=0.20, output=1.20, cache_read=0.02, cache_write=0.25),
     "gpt-6-luna": Price(input=0.10, output=0.50, cache_read=0.01, cache_write=0.125),
+    # Qwen3.x on Go is Anthropic-messages only (family: messages via a
+    # model-level override, keeping the opencode-go provider string).
+    "qwen3.8-flash": Price(input=0.15, output=0.47, cache_read=0.016, cache_write=0.20),
 }
 
 # NOTE on cache buckets: for the pilot models the OpenRouter catalog snapshot

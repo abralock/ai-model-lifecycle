@@ -96,10 +96,12 @@ differences:
 - **Provider pinning does not apply** — Go is one gateway, so both models share
   its infrastructure by construction. Watch the quota caps (≈20% of the monthly
   limit per 5 h per model) when running `--repeats 3` across several Go pairs.
-- Only Go's chat-completions models are wired up (`family: chat` in the
-  `apis:` map): GLM, DeepSeek, Kimi, LongCat, MiMo, Hy, Space Bunny. The
-  MiniMax/Qwen3.x (Anthropic-messages) and Grok/GPT-Luna (Responses) families
-  are not.
+- Go's chat-completions models are wired up (`family: chat` in the
+  `apis:` map): GLM, DeepSeek, Kimi, LongCat, MiMo, Hy, Space Bunny. So is
+  the Responses API family (`family: responses`, via the
+  `opencode-go-responses` gateway entry): GPT Luna (pair
+  `gpt-5.6-luna-vs-6-luna`); Grok and Muse Spark share that endpoint. The
+  MiniMax/Qwen3.x (Anthropic-messages) family is not wired up.
 
 To add another Go pair, copy an existing one in `models.yaml` and add the
 models' Go list prices to `pricing.py` — no code changes needed.

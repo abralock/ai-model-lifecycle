@@ -1,10 +1,12 @@
 """tests/test_go_gateway.py — non-OpenRouter gateways (OpenCode Go).
 
-Models with `api: <name>` in models.yaml are called through that gateway (an
-OpenAI-compatible chat-completions API, e.g. OpenCode Go) instead of
-OpenRouter: no provider pinning, no usage.cost request, the gateway id is
-recorded as the provider, and cost comes from the pricing.py table (Go's list
-prices count against the subscription quota; it does not bill per call).
+Models with `api: <name>` in models.yaml are called through that gateway
+instead of OpenRouter: no provider pinning, no usage.cost request, the gateway
+id is recorded as the provider, and cost comes from the pricing.py table (Go's
+list prices count against the subscription quota; it does not bill per call).
+Two API dialects are wired up: `family: chat` (OpenAI chat completions — GLM,
+DeepSeek, Kimi, ...) and `family: responses` (OpenAI Responses API — Go serves
+GPT Luna, Grok and Muse Spark only at `/v1/responses`).
 
 All offline: litellm is replaced by a fake.
 """
@@ -166,6 +168,108 @@ def test_deepseek_style_cache_tokens_are_counted():
     })
     i, o, cr, cw, tot = runner._extract_usage(resp)
     assert (i, o, cr, cw, tot) == (100, 50, 80, 0, 150)
+
+
+# --------------------------------------------------------------------------- #
+# family: responses (GPT Luna / Grok / Muse Spark on Go)                       #
+# --------------------------------------------------------------------------- #
+RESPONSES_PAIR = "gpt-5.6-luna-vs-6-luna"
+
+
+class _FakeResponsesLitellm(types.SimpleNamespace):
+    """Fakes litellm's Responses API entry point (litellm.responses)."""
+
+    def __init__(self):
+        super().__init__(drop_params=False, calls=[])
+
+    def responses(self, **kw):
+        self.calls.append(kw)
+        payload = {
+            "status": "completed",
+            "output": [
+                {"type": "reasoning"},   # hidden thinking: never graded
+                {"type": "message", "content": [
+                    {"type": "output_text",
+                     "text": "### FILE: x.sql\n```sql\nSELECT 1;\n```\n"},
+                ]},
+            ],
+            "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150,
+                      "input_tokens_details": {"cached_tokens": 40},
+                      "output_tokens_details": {"reasoning_tokens": 20}},
+        }
+        # The real ResponsesAPIResponse exposes .usage as an attribute AND
+        # model_dump() for the whole payload; _extract_usage reads the former,
+        # _responses_text/_responses_finish_reason use the latter.
+        return types.SimpleNamespace(usage=payload["usage"], model_dump=lambda: payload)
+
+
+@pytest.fixture
+def fake_responses_litellm(monkeypatch):
+    fake = _FakeResponsesLitellm()
+    monkeypatch.setitem(sys.modules, "litellm", fake)
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "sk-go-test")
+    monkeypatch.delenv("OPENROUTER_TOKEN", raising=False)
+    return fake
+
+
+def test_repo_responses_gateway_configured():
+    cfg = load_config()
+    api = cfg.apis["opencode-go-responses"]
+    assert api.family == "responses"
+    assert api.base_url == "https://opencode.ai/inference/go/v1"
+    assert api.api_key_env == "OPENCODE_GO_API_KEY"
+
+
+def test_go_responses_call_uses_responses_api(tmp_path, monkeypatch, fake_responses_litellm):
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    cfg = load_config()
+    pair = cfg.get_pair(RESPONSES_PAIR)
+    res = runner.run_case(cfg, RESPONSES_PAIR, "r3_oracle_to_postgres", pair.target, "target",
+                          run_id="20261015T000000Z")
+
+    sent = fake_responses_litellm.calls[0]
+    assert sent["model"] == "openai/gpt-6-luna"
+    assert sent["api_base"] == "https://opencode.ai/inference/go/v1"
+    assert sent["api_key"] == "sk-go-test"
+    # Responses API knobs: max_output_tokens (thinking included), input=
+    assert sent["max_output_tokens"] == cfg.max_tokens_for(pair.target.id)
+    assert "max_tokens" not in sent
+    assert sent["input"][0]["role"] == "system"
+    assert sent["extra_headers"]["x-opencode-session"] == "20261015T000000Z"
+    # OpenRouter extensions are not sent to other gateways
+    assert "extra_body" not in sent
+
+    assert res.ok and res.provider == "opencode-go-responses"
+    assert res.finish_reason == "stop"
+    assert "### FILE: x.sql" in res.output_text
+    assert (res.input_tokens, res.output_tokens) == (100, 50)
+    assert res.cache_read_tokens == 40 and res.reasoning_tokens == 20
+    saved = json.loads(next(tmp_path.rglob("*.json")).read_text())
+    assert saved["provider"] == "opencode-go-responses" and saved["ok"] is True
+
+
+def test_responses_usage_and_reasoning_extracted():
+    resp = types.SimpleNamespace(usage={
+        "input_tokens": 100, "output_tokens": 50, "total_tokens": 150,
+        "input_tokens_details": {"cached_tokens": 40},
+        "output_tokens_details": {"reasoning_tokens": 20},
+    })
+    assert runner._extract_usage(resp) == (100, 50, 40, 0, 150)
+    assert runner._extract_reasoning_tokens(resp) == 20
+
+
+def test_responses_text_skips_reasoning_items():
+    resp = {"output": [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "shh"}]},
+        {"type": "message", "content": [{"type": "output_text", "text": "answer"}]},
+    ]}
+    assert runner._responses_text(resp) == "answer"
+
+
+def test_responses_finish_reason_maps_incomplete():
+    resp = {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}
+    assert runner._responses_finish_reason(resp) == "max_output_tokens"
+    assert runner._responses_finish_reason({"status": "completed"}) == "stop"
 
 
 # --------------------------------------------------------------------------- #

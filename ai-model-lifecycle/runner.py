@@ -213,6 +213,7 @@ def _extract_usage(resp: Any) -> tuple[int, int, int, int, int]:
     output_tokens = g("completion_tokens", "output_tokens")
     cache_read = g(
         "prompt_tokens_details.cached_tokens",
+        "input_tokens_details.cached_tokens",   # Responses API shape
         "cache_read_input_tokens",
         "cached_tokens",
         "prompt_cache_hit_tokens",   # DeepSeek-style cache accounting
@@ -235,13 +236,61 @@ class CallResult(NamedTuple):
 
 
 def _extract_reasoning_tokens(resp: Any) -> int:
-    """Output tokens spent on hidden thinking (usage.completion_tokens_details), or 0."""
+    """Output tokens spent on hidden thinking (usage.completion_tokens_details,
+    or output_tokens_details for the Responses API), or 0."""
     usage = getattr(resp, "usage", None)
     if usage is not None and not isinstance(usage, dict) and hasattr(usage, "model_dump"):
         usage = usage.model_dump()
     details = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+    if not isinstance(details, dict):
+        details = usage.get("output_tokens_details") if isinstance(usage, dict) else None
     n = details.get("reasoning_tokens") if isinstance(details, dict) else None
     return int(n) if isinstance(n, (int, float)) else 0
+
+
+# --------------------------------------------------------------------------- #
+# Responses API (family: responses — Go serves GPT Luna / Grok / Muse Spark)   #
+# --------------------------------------------------------------------------- #
+def _as_dict(obj: Any) -> dict[str, Any]:
+    """model_dump a pydantic-ish response into a plain dict (best effort)."""
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        try:
+            return obj.model_dump()
+        except Exception:
+            return {}
+    return {}
+
+
+def _responses_text(resp: Any) -> str:
+    """Join the output_text parts of a Responses API reply.
+
+    Reasoning items are skipped — hidden thinking is never graded as the
+    answer (same rule as the chat route's reasoning_effort note).
+    """
+    data = _as_dict(resp)
+    parts: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                t = part.get("text")
+                if isinstance(t, str):
+                    parts.append(t)
+    return "\n".join(parts)
+
+
+def _responses_finish_reason(resp: Any) -> str | None:
+    """Map Responses API status onto a finish_reason-ish string."""
+    status = _as_dict(resp).get("status")
+    if status == "completed":
+        return "stop"
+    if status == "incomplete":
+        reason = _as_dict(_as_dict(resp).get("incomplete_details")).get("reason")
+        return str(reason) if reason else "incomplete"
+    return str(status) if status else None
 
 
 def _extract_billed_cost(resp: Any) -> float | None:
@@ -280,8 +329,10 @@ def call_model(
       16000}) caps hidden thinking, which otherwise shares max_tokens with the
       answer.
     * `api=<ApiRef>` — a non-OpenRouter gateway from models.yaml `apis:` (e.g.
-      OpenCode Go), spoken to as an OpenAI-compatible chat-completions API
-      (litellm `openai/` + `api_base`). The gateway itself is already a single
+      OpenCode Go). `family: chat` speaks OpenAI chat completions, `family:
+      responses` speaks the OpenAI Responses API (litellm `openai/` +
+      `api_base`; Go serves GPT Luna / Grok / Muse Spark only at
+      `/v1/responses`). The gateway itself is already a single
       provider, so no provider pinning, usage-cost request or reasoning
       preferences are sent (they are OpenRouter-specific extensions). Go asks
       clients to identify themselves and send a stable session id, which the
@@ -309,10 +360,10 @@ def call_model(
 
     served_by: str | None = None     # recorded as RunResult.provider
     if api is not None:
-        if api.family != "chat":
+        if api.family not in ("chat", "responses"):
             return CallResult(usage, 0, 0.0, "", None,
                               f"api {api.id!r} has unsupported family {api.family!r} "
-                              "(only 'chat' is wired up)")
+                              "(wired up: 'chat', 'responses')")
         key = api.key()
         if not key:
             return CallResult(usage, 0, 0.0, "", None,
@@ -347,21 +398,37 @@ def call_model(
     # them where a provider rejects them.
     call_kwargs.update(extra_params or {})
 
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
+    # Go serves some models only over the OpenAI Responses API (GPT Luna, Grok,
+    # Muse Spark); those use max_output_tokens (thinking included), not
+    # max_tokens, and return their answer in output items, not choices.
+    use_responses_api = api is not None and api.family == "responses"
+
     last_err: str | None = None
     for attempt in range(1, max_retries + 1):
         t0 = time.time()
         try:
-            resp = litellm.completion(
-                model=model_str,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=timeout_s,
-                **call_kwargs,
-            )
+            if use_responses_api:
+                resp = litellm.responses(
+                    model=model_str,
+                    input=messages,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                    timeout=timeout_s,
+                    **call_kwargs,
+                )
+            else:
+                resp = litellm.completion(
+                    model=model_str,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout_s,
+                    **call_kwargs,
+                )
             latency = time.time() - t0
             i, o, cr, cw, tot = _extract_usage(resp)
             usage = {
@@ -371,18 +438,22 @@ def call_model(
                 "cache_write_tokens": cw,
                 "total_tokens": tot,
             }
-            msg = resp.choices[0].message
-            text = msg.content or ""
-            # Reasoning models (Opus 4.8/5.5) may return the answer in the
-            # `reasoning` block and leave `content` empty. Prefer content,
-            # fall back to reasoning so we don't grade an empty string.
-            if not text.strip():
-                reasoning = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None)
-                psf = getattr(msg, "model_extra", {}) or {}
-                reasoning = reasoning or psf.get("reasoning") or psf.get("reasoning_content")
-                if reasoning:
-                    text = reasoning if isinstance(reasoning, str) else str(reasoning)
-            finish_reason = getattr(resp.choices[0], "finish_reason", None)
+            if use_responses_api:
+                text = _responses_text(resp)
+                finish_reason = _responses_finish_reason(resp)
+            else:
+                msg = resp.choices[0].message
+                text = msg.content or ""
+                # Reasoning models (Opus 4.8/5.5) may return the answer in the
+                # `reasoning` block and leave `content` empty. Prefer content,
+                # fall back to reasoning so we don't grade an empty string.
+                if not text.strip():
+                    reasoning = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None)
+                    psf = getattr(msg, "model_extra", {}) or {}
+                    reasoning = reasoning or psf.get("reasoning") or psf.get("reasoning_content")
+                    if reasoning:
+                        text = reasoning if isinstance(reasoning, str) else str(reasoning)
+                finish_reason = getattr(resp.choices[0], "finish_reason", None)
             return CallResult(
                 usage, attempt, latency, text, finish_reason,
                 None if text else f"empty completion (finish_reason={finish_reason})",

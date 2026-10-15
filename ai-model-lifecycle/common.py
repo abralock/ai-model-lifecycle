@@ -49,7 +49,8 @@ class ApiRef:
     models.yaml (e.g. OpenCode Go, an OpenAI-compatible chat-completions API).
 
     `family` is the API dialect the gateway speaks for the models we route to
-    it: "chat" (OpenAI chat completions) is the only one wired up so far.
+    it: "chat" (OpenAI chat completions) or "responses" (OpenAI Responses API —
+    Go serves GPT Luna / Grok / Muse Spark only at `/v1/responses`).
     """
 
     id: str

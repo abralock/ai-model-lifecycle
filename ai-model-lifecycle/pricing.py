@@ -87,6 +87,12 @@ PRICES: dict[str, Price] = {
     "longcat-2.0": Price(input=0.30, output=1.20, cache_read=0.006, cache_write=0.0),
     "mimo-v2.6-flash": Price(input=0.14, output=0.28, cache_read=0.0028, cache_write=0.0),
     "mimo-v2.6-pro": Price(input=0.435, output=0.87, cache_read=0.003625, cache_write=0.0),
+    # GPT Luna on Go (Responses API only; api: opencode-go-responses). Go list
+    # prices for the <=272K-context tier, checked 2026-10-15 on the Go docs
+    # page; the >272K tier (2x input / 1.5x output) is not modeled — Gate 1
+    # prompts stay well under 272K.
+    "gpt-5.6-luna": Price(input=0.20, output=1.20, cache_read=0.02, cache_write=0.25),
+    "gpt-6-luna": Price(input=0.10, output=0.50, cache_read=0.01, cache_write=0.125),
 }
 
 # NOTE on cache buckets: for the pilot models the OpenRouter catalog snapshot

@@ -61,6 +61,7 @@ tokens in prompt), fetched from pinned forks via `cases/sources.lock.json`
 | `haiku-4.5-vs-5.5` | Full + real suite | **111.1** ✅ |
 | `glm-5.2-vs-5.3` | ⚠️ Partial only (smoke test, 1/4 cases) — not a scorecard | — |
 | `gpt-5.6-luna-vs-6-luna` | Full run via OpenCode Go **Responses API** (new `family: responses` route, wired 2026-10-15). 12/12 quality both; 6 Luna +9.2% slower, −56.5% cheaper | **113.3** ✅ |
+| ↳ same pair, `--suite real` | 0/6 both (r1b edits-don't-apply → build fails; r2 parity 0–7/8). Verified MODEL ×12. Same r1b wall as every model so far (see NEAR_MISS.md); r2 passable (Sonnet 5/5.5 went 3/3) | no overall (0% quality) |
 
 Notable config notes:
 - GLM-5.x on Go is thinking-only; both GLM models use `reasoning_effort: low`

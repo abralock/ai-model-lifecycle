@@ -93,6 +93,15 @@ override on `api: opencode-go` (Qwen3.x; MiniMax shares that dialect).
 Mind the quota caps (~20% of the monthly limit per 5 h per
 model); a 429 from Go is an infra error, not a model failure.
 
+**Claude Code pairs** (`*-cc`, `api: claude-code`) run the Claude models through
+`claude -p` on the owner's personal claude.ai subscription (personal use only;
+plan: `ai-model-lifecycle/docs/CLAUDE_CODE_GATEWAY.md`). The runner refuses to
+start unless `claude auth status` says `authMethod: "claude.ai"`, and stops the
+whole run when the subscription usage limit is hit (exit code 3; runs already
+written are kept, but it's a partial run). `Cost source` reads
+`Claude Code estimate at API prices (12/12)`: an estimate, not a bill. Never
+compare `-cc` scorecards with the OpenRouter ones.
+
 ## Optional: MLflow
 
 Results can be copied into MLflow for charts and history; `runs/` stays the

@@ -113,11 +113,20 @@ def _rep(rec: dict) -> int:
 
 
 def _call_cost(rec: dict) -> float:
-    billed = rec.get("billed_cost_usd")
-    if isinstance(billed, (int, float)):
-        return float(billed)
+    """Billed cost, else Claude Code's estimate at API prices, else the price table."""
+    for key in ("billed_cost_usd", "cost_estimate_usd"):
+        if isinstance(rec.get(key), (int, float)):
+            return float(rec[key])
     return report.cost_usd(rec["model_slug"], rec.get("input_tokens", 0), rec.get("output_tokens", 0),
                            rec.get("cache_read_tokens", 0), rec.get("cache_write_tokens", 0))
+
+
+def _cost_source_tag(runs: list[dict]) -> str:
+    if all(isinstance(r.get("billed_cost_usd"), (int, float)) for r in runs):
+        return "billed"
+    if all(isinstance(r.get("cost_estimate_usd"), (int, float)) for r in runs):
+        return "claude code estimate"
+    return "price table"
 
 
 CURRENT_COLOR, TARGET_COLOR = "#1f77b4", "#ff7f0e"     # blue / orange, as in MLflow's own charts
@@ -264,8 +273,7 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
             "verdict": ov.verdict if ov else "n/a (a model passed nothing)",
             "provider_pinned": str(all(r.get("provider") for r in runs)),
             "providers": ", ".join(sorted({r.get("provider") or "not recorded" for r in runs})),
-            "cost_source": "billed" if all(isinstance(r.get("billed_cost_usd"), (int, float)) for r in runs)
-                           else "price table",
+            "cost_source": _cost_source_tag(runs),
             "repeats": str(max(_rep(r) for r in runs)),
         })
         comps = score_components(ov)

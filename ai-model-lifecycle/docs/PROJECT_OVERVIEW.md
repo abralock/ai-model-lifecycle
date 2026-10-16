@@ -62,7 +62,7 @@ tokens in prompt), fetched from pinned forks via `cases/sources.lock.json`
 | `glm-5.2-vs-5.3` | ⚠️ Partial only (smoke test, 1/4 cases) — not a scorecard | — |
 | `gpt-5.6-luna-vs-6-luna` | Full run via OpenCode Go **Responses API** (new `family: responses` route, wired 2026-10-15). 12/12 quality both; 6 Luna +9.2% slower, −56.5% cheaper | **113.3** ✅ |
 | ↳ same pair, `--suite real` | 0/6 both (r1b edits-don't-apply → build fails; r2 parity 0–7/8). Verified MODEL ×12. Same r1b wall as every model so far (see NEAR_MISS.md); r2 passable (Sonnet 5/5.5 went 3/3) | no overall (0% quality) |
-| `qwen3.8-flash-vs-glm-5.3-flash` | Cross-vendor, mixed dialects on one gateway (Qwen = `family: messages` model-level override; GLM = chat). Sanity: 6/12 quality both, GLM 22× faster + 12× cheaper → **125.0** ✅. Real: Qwen 0/6 (thinking eats the 32k cap — 64k/128k calls die to Go upstream timeouts; probed), GLM 1/6 (r2 1/3). Verified MODEL 12+11. Qwen needs `timeout_s: 1200` floor and a real-suite 32k cap (`max_tokens_by_model`). | sanity **125.0** ✅ |
+| `qwen3.8-flash-vs-glm-5.3-flash` | Cross-vendor, mixed dialects on one gateway (Qwen = `family: messages` model-level override; GLM = chat). Sanity (re-run 20261016T075024Z): Qwen 5/12 vs GLM 7/12 quality (Fisher p = 0.68, n.s.; r3 0/3 both — invalid plpgsql loops, verified MODEL ×12), GLM 8.7× faster + 10× cheaper → **145.0** ✅. (First run: 6/12 both → 125.0.) Real: Qwen 0/6 (thinking eats the 32k cap — 64k/128k calls die to Go upstream timeouts; probed), GLM 1/6 (r2 1/3). Qwen needs `timeout_s: 1200` floor and a real-suite 32k cap (`max_tokens_by_model`). | sanity **145.0** ✅ |
 
 Notable config notes:
 - GLM-5.x on Go is thinking-only; both GLM models use `reasoning_effort: low`

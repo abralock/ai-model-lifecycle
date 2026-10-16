@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from common import RUNS_DIR, Config, list_runs, load_config, load_env, load_runs
-from pricing import cost_usd, get_price
+from pricing import DEFAULT_PRICE, cost_usd, get_price
 from scorers.dispatch import score_case
 
 # Weights from GATE1_BUILD_PLAN.md §7 (Quality 0.5 / Cost 0.3 / Time 0.2).
@@ -413,13 +413,16 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
         lines.append("")
 
     # ---- price reference --------------------------------------------------- #
+    # Skipped when no run used it and neither model has a pricing.py row (e.g.
+    # Claude Code pairs, priced by their estimate): the fallback is no reference.
     pc, pt = get_price(pair.current.id), get_price(pair.target.id)
-    lines.append("### Price reference (USD / 1M tokens, `pricing.py`; used only when no billed cost)\n")
-    lines.append("| Model | input | output | cache-read | cache-write |")
-    lines.append("|---|---:|---:|---:|---:|")
-    lines.append(f"| {pair.current.name} | {pc.input} | {pc.output} | {pc.cache_read} | {pc.cache_write} |")
-    lines.append(f"| {pair.target.name} | {pt.input} | {pt.output} | {pt.cache_read} | {pt.cache_write} |")
-    lines.append("")
+    if _table_runs(cur) or _table_runs(tgt) or pc is not DEFAULT_PRICE or pt is not DEFAULT_PRICE:
+        lines.append("### Price reference (USD / 1M tokens, `pricing.py`; used only when no billed cost)\n")
+        lines.append("| Model | input | output | cache-read | cache-write |")
+        lines.append("|---|---:|---:|---:|---:|")
+        lines.append(f"| {pair.current.name} | {pc.input} | {pc.output} | {pc.cache_read} | {pc.cache_write} |")
+        lines.append(f"| {pair.target.name} | {pt.input} | {pt.output} | {pt.cache_read} | {pt.cache_write} |")
+        lines.append("")
 
     # ---- weighted overall (normalized to current = 100) ------------------- #
     ov = overall_score(cur, tgt)

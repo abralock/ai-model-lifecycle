@@ -51,13 +51,16 @@ class ApiRef:
     `family` is the API dialect the gateway speaks for the models we route to
     it: "chat" (OpenAI chat completions), "responses" (OpenAI Responses API —
     Go serves GPT Luna / Grok / Muse Spark only at `/v1/responses`), or
-    "messages" (Anthropic messages API — Go's MiniMax / Qwen3.x). A model may
-    override it with its own `family:` (ModelRef.family) when one gateway
-    serves different models over different dialects.
+    "messages" (Anthropic messages API — Go's MiniMax / Qwen3.x), or
+    "claude-code" (the Claude Code CLI on the personal claude.ai subscription:
+    no base_url and no key, the CLI uses its own login — see
+    docs/CLAUDE_CODE_GATEWAY.md). A model may override it with its own
+    `family:` (ModelRef.family) when one gateway serves different models over
+    different dialects.
     """
 
     id: str
-    base_url: str
+    base_url: str = ""
     api_key_env: str = ""
     family: str = "chat"
 

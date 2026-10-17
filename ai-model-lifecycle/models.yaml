@@ -88,6 +88,26 @@ pairs:
 #  Qwen3.x share Qwen's Anthropic-messages dialect (family: messages override,
 #  see the qwen3.8-flash-vs-glm-5.3-flash pair).
 
+# --- Claude Code pairs (personal claude.ai subscription) ----------------------
+# Same Claude models, called through the Claude Code CLI (`claude -p`, api:
+# claude-code) on my own subscription instead of OpenRouter. Personal use only
+# — see docs/CLAUDE_CODE_GATEWAY.md. Ids are Claude Code's (dashes), not
+# OpenRouter slugs. A different measurement (Claude Code's own request, no
+# temperature control, cost is Claude Code's estimate at API list prices), so
+# these `-cc` scorecards are never compared with the OpenRouter ones.
+  - id: opus-4.8-vs-5.5-cc
+    current: {id: claude-opus-4-8,   name: "Claude Opus 4.8 (CC)",   api: claude-code}
+    target:  {id: claude-opus-5-5,   name: "Claude Opus 5.5 (CC)",   api: claude-code}
+  - id: sonnet-5-vs-5.5-cc
+    current: {id: claude-sonnet-5,   name: "Claude Sonnet 5 (CC)",   api: claude-code}
+    target:  {id: claude-sonnet-5-5, name: "Claude Sonnet 5.5 (CC)", api: claude-code}
+  - id: sonnet-4.6-vs-5.5-cc
+    current: {id: claude-sonnet-4-6, name: "Claude Sonnet 4.6 (CC)", api: claude-code}
+    target:  {id: claude-sonnet-5-5, name: "Claude Sonnet 5.5 (CC)", api: claude-code}
+  - id: haiku-4.5-vs-5.5-cc
+    current: {id: claude-haiku-4-5,  name: "Claude Haiku 4.5 (CC)",  api: claude-code}
+    target:  {id: claude-haiku-5-5,  name: "Claude Haiku 5.5 (CC)",  api: claude-code}
+
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:
   # OpenRouter provider routing, sent on every call. Pin ONE provider with
@@ -108,8 +128,10 @@ defaults:
 
 # --- Non-OpenRouter gateways ---------------------------------------------------
 # A model with `api: <name>` is called through that gateway instead of
-# OpenRouter. `family: chat` = OpenAI-compatible chat completions (litellm
-# `openai/` + base_url); it is the only family wired up in runner.py so far.
+# OpenRouter. Families wired up in runner.py: `chat` (OpenAI-compatible chat
+# completions, litellm `openai/` + base_url), `responses` (OpenAI Responses
+# API), `messages` (Anthropic messages API) and `claude-code` (the Claude Code
+# CLI on the personal subscription).
 apis:
   opencode-go:
     # OpenCode Go subscription: https://opencode.ai/v2/docs/console/go
@@ -125,6 +147,10 @@ apis:
     base_url: https://opencode.ai/inference/go/v1
     api_key_env: OPENCODE_GO_API_KEY
     family: responses
+  claude-code:
+    # Claude Code CLI (`claude -p`) on my own claude.ai subscription. Personal use
+    # only — see docs/CLAUDE_CODE_GATEWAY.md. No base_url or key: the CLI's own login.
+    family: claude-code
 
 # Cases enabled for the pilot. Each maps to a directory under cases/.
 # (R2 GWT->Angular and the C/T suites are deferred — see TEST_CASES.md.)

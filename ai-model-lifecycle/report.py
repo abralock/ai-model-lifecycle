@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from common import RUNS_DIR, Config, list_runs, load_config, load_env, load_runs
-from pricing import cost_usd, get_price
+from pricing import DEFAULT_PRICE, cost_usd, get_price
 from scorers.dispatch import score_case
 
 # Weights from GATE1_BUILD_PLAN.md §7 (Quality 0.5 / Cost 0.3 / Time 0.2).
@@ -79,6 +79,7 @@ class ModelAgg:
     reasoning_tokens: int = 0       # part of output_tokens spent thinking (when reported)
     cost_usd: float = 0.0
     billed_runs: int = 0            # runs whose cost is OpenRouter's billed cost
+    estimate_runs: int = 0          # runs whose cost is Claude Code's estimate (not billed)
     providers: dict[str, int] = field(default_factory=dict)  # provider -> runs
     latency_sum: float = 0.0
     case_results: dict[str, list[int]] = field(default_factory=dict)  # case -> [passes, runs]
@@ -169,11 +170,16 @@ def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
         a.total_tokens += int(rec.get("total_tokens", 0) or 0)
         a.reasoning_tokens += int(rec.get("reasoning_tokens", 0) or 0)
         a.latency_sum += float(rec.get("latency_s", 0.0) or 0.0)
-        # cost: what OpenRouter billed when recorded, else the price table
+        # cost: what OpenRouter billed when recorded, else Claude Code's
+        # estimate at API list prices, else the price table
         billed = rec.get("billed_cost_usd")
+        estimate = rec.get("cost_estimate_usd")
         if isinstance(billed, (int, float)):
             a.cost_usd += float(billed)
             a.billed_runs += 1
+        elif isinstance(estimate, (int, float)):
+            a.cost_usd += float(estimate)
+            a.estimate_runs += 1
         else:
             a.cost_usd += cost_usd(
                 slug,
@@ -254,12 +260,24 @@ def _providers(a: ModelAgg) -> str:
     return ", ".join(f"{p} ×{n}" for p, n in sorted(a.providers.items())) or "—"
 
 
+def _table_runs(a: ModelAgg) -> int:
+    """Runs priced from the pricing.py table (no billed cost, no estimate)."""
+    return a.runs - a.billed_runs - a.estimate_runs
+
+
 def _cost_source(a: ModelAgg) -> str:
     if a.runs and a.billed_runs == a.runs:
         return f"billed by OpenRouter ({a.billed_runs}/{a.runs})"
-    if a.billed_runs:
-        return f"billed {a.billed_runs}/{a.runs}, rest price table"
-    return "price table (pricing.py)"
+    if a.runs and a.estimate_runs == a.runs:
+        return f"Claude Code estimate at API prices ({a.estimate_runs}/{a.runs})"
+    if not a.billed_runs and not a.estimate_runs:
+        return "price table (pricing.py)"
+    parts = [f"billed {a.billed_runs}/{a.runs}"] if a.billed_runs else []
+    if a.estimate_runs:
+        parts.append(f"Claude Code estimate {a.estimate_runs}/{a.runs}")
+    if _table_runs(a):
+        parts.append("rest price table")
+    return ", ".join(parts)
 
 
 def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg],
@@ -328,9 +346,13 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
         lines.append("> ⚠️ Current and target ran on **different providers** (or a mix). The Time "
                      "comparison partly measures provider speed, not model speed. Pin one provider "
                      "in `models.yaml` (`defaults.provider`) and re-run.\n")
-    if cur.billed_runs < cur.runs or tgt.billed_runs < tgt.runs:
+    if _table_runs(cur) or _table_runs(tgt):
         lines.append("> Cost uses the `pricing.py` table for runs without an OpenRouter billed "
                      "cost (runs made before billed cost was recorded). Table prices may be out of date.\n")
+    if cur.estimate_runs or tgt.estimate_runs:
+        lines.append("> Cost is Claude Code's estimate at API list prices (`total_cost_usd`). The "
+                     "subscription does not bill per call, so this is not a bill, and it is not "
+                     "comparable with OpenRouter billed cost.\n")
     if p_val >= 0.05:
         lines.append(f"> ⚠️ The quality difference is **not statistically significant** "
                      f"(Fisher p = {p_val:.2f}, n = {cur.runs} vs {tgt.runs}). Add cases or "
@@ -391,13 +413,16 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
         lines.append("")
 
     # ---- price reference --------------------------------------------------- #
+    # Skipped when no run used it and neither model has a pricing.py row (e.g.
+    # Claude Code pairs, priced by their estimate): the fallback is no reference.
     pc, pt = get_price(pair.current.id), get_price(pair.target.id)
-    lines.append("### Price reference (USD / 1M tokens, `pricing.py`; used only when no billed cost)\n")
-    lines.append("| Model | input | output | cache-read | cache-write |")
-    lines.append("|---|---:|---:|---:|---:|")
-    lines.append(f"| {pair.current.name} | {pc.input} | {pc.output} | {pc.cache_read} | {pc.cache_write} |")
-    lines.append(f"| {pair.target.name} | {pt.input} | {pt.output} | {pt.cache_read} | {pt.cache_write} |")
-    lines.append("")
+    if _table_runs(cur) or _table_runs(tgt) or pc is not DEFAULT_PRICE or pt is not DEFAULT_PRICE:
+        lines.append("### Price reference (USD / 1M tokens, `pricing.py`; used only when no billed cost)\n")
+        lines.append("| Model | input | output | cache-read | cache-write |")
+        lines.append("|---|---:|---:|---:|---:|")
+        lines.append(f"| {pair.current.name} | {pc.input} | {pc.output} | {pc.cache_read} | {pc.cache_write} |")
+        lines.append(f"| {pair.target.name} | {pt.input} | {pt.output} | {pt.cache_read} | {pt.cache_write} |")
+        lines.append("")
 
     # ---- weighted overall (normalized to current = 100) ------------------- #
     ov = overall_score(cur, tgt)

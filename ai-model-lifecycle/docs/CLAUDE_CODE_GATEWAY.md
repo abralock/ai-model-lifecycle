@@ -72,10 +72,26 @@ Checked 2026-10-16 (Claude Code 2.1.301, docs only, no model call):
   subscription (`ANTHROPIC_FOUNDRY_*`, `ANTHROPIC_AWS_*`, `ANTHROPIC_BEDROCK_*`,
   `ANTHROPIC_VERTEX_*`, `AWS_BEARER_TOKEN_BEDROCK`). The runner strips those too.
 
+Checked 2026-10-17 (two small Haiku probes):
+- **An answer that hits the output limit is continued by Claude Code** in further
+  requests (up to 4; `num_turns` counts them, a normal call is `num_turns: 1`).
+  If one finishes, `result` holds only the last request's text, a fragment.
+  This happened once in a real run: Sonnet 5.5 r1b, run 20261017T043407Z, with
+  345k input, 132.5k output and 11k chars returned, recorded as a whole answer
+  before this was handled. If none finishes, the CLI gives up with `is_error: true` and
+  `api_error: "max_output_tokens"`. The runner records both as cut off at the
+  limit (`finish_reason: length`, empty completion, a FAIL, not retried).
+- Thinking tokens are reported, in `usage.output_tokens_details.thinking_tokens`,
+  and recorded as `reasoning_tokens`. Each run also records `num_turns` and
+  `duration_api_ms`.
+
 Not verified yet (check before relying on it):
 - The exact error JSON when the subscription usage limit is hit. The runner
   stops on `"usage limit"` / `"rate limit"` / `"hit your limit"` in an error `result`.
-- Whether `usage` reports thinking tokens separately (so far it doesn't).
+- Why a few calls sent the prompt twice with no continuation (Opus 4.8 r1b
+  20261017T003122Z: 217k input; Sonnet 5.5 r1 20261017T025905Z.r1: 15.8k).
+  Probably an internal retry. `num_turns` and `duration_api_ms` in the run
+  file should show it next time.
 
 ## 3. Config changes
 

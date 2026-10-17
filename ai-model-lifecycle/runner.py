@@ -120,6 +120,10 @@ class RunResult:
     # Claude Code's total_cost_usd: an estimate at API list prices, not a bill
     # (the subscription does not bill per call).
     cost_estimate_usd: float | None = None
+    # Claude Code only: requests the CLI made for this answer (more than 1 =
+    # it hit the output limit and was continued) and its time in the API.
+    num_turns: int | None = None
+    duration_api_ms: int | None = None
     # --- timing ---
     latency_s: float = 0.0
     attempts: int = 0
@@ -245,6 +249,8 @@ class CallResult(NamedTuple):
     # Set when the whole run must stop (Claude Code subscription usage limit):
     # run_case raises UsageLimitReached with it instead of recording a run.
     stop_run: str | None = None
+    num_turns: int | None = None
+    duration_api_ms: int | None = None
 
 
 def _extract_reasoning_tokens(resp: Any) -> int:
@@ -402,6 +408,26 @@ def _served_models_match(model_usage: Any, model_slug: str) -> tuple[bool, str]:
     return any(pat.fullmatch(k) for k in model_usage), served
 
 
+def _cc_usage(out: dict[str, Any]) -> tuple[dict[str, int], float | None, int]:
+    """(usage, cost estimate, thinking tokens) from a `claude -p` JSON result.
+    The prompt total includes cache tokens (same meaning as the other routes)."""
+    u = out.get("usage") or {}
+    cr = int(u.get("cache_read_input_tokens") or 0)
+    cw = int(u.get("cache_creation_input_tokens") or 0)
+    i = int(u.get("input_tokens") or 0) + cr + cw
+    o = int(u.get("output_tokens") or 0)
+    usage = {"input_tokens": i, "output_tokens": o, "cache_read_tokens": cr,
+             "cache_write_tokens": cw, "total_tokens": i + o}
+    cost = out.get("total_cost_usd")
+    thinking = (u.get("output_tokens_details") or {}).get("thinking_tokens")
+    return (usage, float(cost) if isinstance(cost, (int, float)) else None,
+            int(thinking) if isinstance(thinking, (int, float)) else 0)
+
+
+def _int_or_none(v: Any) -> int | None:
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
 def _call_claude_code(
     model_slug: str,
     prompt: str,
@@ -451,6 +477,20 @@ def _call_claude_code(
                             f"claude -p exit {proc.returncode} with no output: {tail!r}")
             else:
                 result = out.get("result") if isinstance(out.get("result"), str) else ""
+                turns = _int_or_none(out.get("num_turns"))
+                api_ms = _int_or_none(out.get("duration_api_ms"))
+                if out.get("is_error") and out.get("api_error") == "max_output_tokens":
+                    # Claude Code continued the answer up to 4 times and it never
+                    # finished: cut off at the output limit, the model's own
+                    # behaviour (a FAIL like any finish_reason=length), not an
+                    # infra error, and not retried (it would hit the limit again).
+                    usage, estimate, thinking = _cc_usage(out)
+                    return CallResult(
+                        usage, attempt, latency, "", "length",
+                        f"empty completion (finish_reason=length): the answer exceeded the "
+                        f"output limit ({max_tokens} tokens) over {turns or '?'} requests",
+                        provider="claude-code", cost_estimate_usd=estimate,
+                        reasoning_tokens=thinking, num_turns=turns, duration_api_ms=api_ms)
                 if out.get("is_error"):
                     status = out.get("api_error_status")
                     msg = f"claude -p error (api_error_status={status}): {result[:300]}"
@@ -462,28 +502,32 @@ def _call_claude_code(
                     last_err = msg
                     retryable = status in _CC_RETRY_STATUS or "overloaded" in result.lower()
                 else:
-                    u = out.get("usage") or {}
-                    cr = int(u.get("cache_read_input_tokens") or 0)
-                    cw = int(u.get("cache_creation_input_tokens") or 0)
-                    i = int(u.get("input_tokens") or 0) + cr + cw    # the whole prompt
-                    o = int(u.get("output_tokens") or 0)
-                    usage = {"input_tokens": i, "output_tokens": o, "cache_read_tokens": cr,
-                             "cache_write_tokens": cw, "total_tokens": i + o}
+                    usage, estimate, thinking = _cc_usage(out)
                     stop = out.get("stop_reason")
                     finish_reason = {"end_turn": "stop", "max_tokens": "length"}.get(stop, stop)
-                    cost = out.get("total_cost_usd")
-                    estimate = float(cost) if isinstance(cost, (int, float)) else None
                     ok_model, served = _served_models_match(out.get("modelUsage"), model_slug)
                     text = result if result.strip() else ""
                     if not ok_model:
                         # never score a different model's answer
                         text, err = "", f"served by {served}, asked for {model_slug}"
+                    elif turns is not None and turns > 1:
+                        # With no tools, more than one request means the answer hit
+                        # the output limit and Claude Code continued it; `result` is
+                        # only the last request's text, a fragment. Cut off at the
+                        # limit, like finish_reason=length on the other routes.
+                        text, finish_reason = "", "length"
+                        err = (f"empty completion (finish_reason=length): the answer hit the "
+                               f"output limit ({max_tokens} tokens) and Claude Code continued it "
+                               f"over {turns} requests; only the last part is returned, so it "
+                               "is not graded")
                     elif not text:
                         err = f"empty completion (finish_reason={finish_reason})"
                     else:
                         err = None
                     return CallResult(usage, attempt, latency, text, finish_reason, err,
-                                      provider="claude-code", cost_estimate_usd=estimate)
+                                      provider="claude-code", cost_estimate_usd=estimate,
+                                      reasoning_tokens=thinking, num_turns=turns,
+                                      duration_api_ms=api_ms)
         if not retryable or attempt >= max_retries:
             break
         time.sleep(min(backoff_base_s * (2 ** (attempt - 1)), 60.0))
@@ -758,6 +802,8 @@ def run_case(
         provider=call.provider,
         billed_cost_usd=call.billed_cost_usd,
         cost_estimate_usd=call.cost_estimate_usd,
+        num_turns=call.num_turns,
+        duration_api_ms=call.duration_api_ms,
         **usage,
     )
     if not dry_run:  # a dry run's empty output must never become "the latest run"

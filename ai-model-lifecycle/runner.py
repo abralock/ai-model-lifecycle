@@ -26,7 +26,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -112,6 +117,9 @@ class RunResult:
     reasoning_tokens: int = 0                           # of output_tokens, spent thinking (if reported)
     provider: str | None = None                         # provider that served it
     billed_cost_usd: float | None = None                # OpenRouter usage.cost
+    # Claude Code's total_cost_usd: an estimate at API list prices, not a bill
+    # (the subscription does not bill per call).
+    cost_estimate_usd: float | None = None
     # --- timing ---
     latency_s: float = 0.0
     attempts: int = 0
@@ -233,6 +241,10 @@ class CallResult(NamedTuple):
     provider: str | None = None
     billed_cost_usd: float | None = None
     reasoning_tokens: int = 0
+    cost_estimate_usd: float | None = None
+    # Set when the whole run must stop (Claude Code subscription usage limit):
+    # run_case raises UsageLimitReached with it instead of recording a run.
+    stop_run: str | None = None
 
 
 def _extract_reasoning_tokens(resp: Any) -> int:
@@ -302,6 +314,183 @@ def _extract_billed_cost(resp: Any) -> float | None:
     return float(cost) if isinstance(cost, (int, float)) else None
 
 
+# --------------------------------------------------------------------------- #
+# Claude Code CLI (family: claude-code — the personal claude.ai subscription)  #
+# --------------------------------------------------------------------------- #
+class ClaudeCodeNotReady(RuntimeError):
+    """The Claude Code CLI is missing or not logged in with the subscription."""
+
+
+class UsageLimitReached(RuntimeError):
+    """The Claude Code subscription usage limit was hit: stop the whole run."""
+
+
+# Lean flags: without them Claude Code's own instructions add 5,000-10,500
+# input tokens per call, different per model (docs/CLAUDE_CODE_GATEWAY.md §2).
+CLAUDE_CODE_FLAGS = [
+    "--output-format", "json",
+    "--tools", "",
+    "--setting-sources", "",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--exclude-dynamic-system-prompt-sections",
+    "--no-session-persistence",
+]
+
+# Credentials that would make the CLI use something other than the claude.ai
+# login (an API key, a cloud provider, a proxy). Removed from the CLI's
+# environment so it can never bill an API key by accident.
+_CC_STRIPPED_ENV = {
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+    "AWS_BEARER_TOKEN_BEDROCK",
+}
+_CC_STRIPPED_PREFIXES = (
+    "CLAUDE_CODE_USE_",          # BEDROCK / VERTEX / FOUNDRY / ...
+    "ANTHROPIC_FOUNDRY_", "ANTHROPIC_AWS_", "ANTHROPIC_BEDROCK_", "ANTHROPIC_VERTEX_",
+)
+
+_CC_RETRY_STATUS = {429, 500, 502, 503, 504, 529}
+# The exact text of a subscription limit hit is not confirmed yet; match
+# conservatively and stop rather than retry into the limit.
+_CC_LIMIT_RE = re.compile(r"usage limit|rate limit|hit your limit", re.IGNORECASE)
+
+
+def _claude_code_env(max_tokens: int | None = None) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items()
+           if k not in _CC_STRIPPED_ENV and not k.startswith(_CC_STRIPPED_PREFIXES)}
+    if max_tokens:
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_tokens)
+    return env
+
+
+def _claude_code_effort(reasoning: dict[str, Any] | None) -> str | None:
+    """The suite's thinking effort (models.yaml `reasoning: {effort: ...}`) as
+    a `--effort` level, or None to leave each model's default."""
+    effort = (reasoning or {}).get("effort")
+    return str(effort) if effort else None
+
+
+def claude_code_preflight() -> None:
+    """Refuse to run unless the `claude` CLI is on PATH and logged in with the
+    claude.ai subscription (checked with the same environment the calls use)."""
+    if shutil.which("claude") is None:
+        raise ClaudeCodeNotReady("Claude Code CLI `claude` not found on PATH")
+    try:
+        proc = subprocess.run(["claude", "auth", "status"], capture_output=True, text=True,
+                              timeout=60, env=_claude_code_env())
+        status = json.loads(proc.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise ClaudeCodeNotReady(f"`claude auth status` failed: {exc}") from None
+    if not status.get("loggedIn"):
+        raise ClaudeCodeNotReady("Claude Code is not logged in — run `claude auth login` "
+                                 "with your claude.ai account")
+    method = status.get("authMethod")
+    if method != "claude.ai":
+        raise ClaudeCodeNotReady(
+            f"Claude Code is logged in with {method!r}, not the claude.ai subscription "
+            "(an API key or cloud provider would be billed) — this route is for the "
+            "personal subscription only")
+
+
+def _served_models_match(model_usage: Any, model_slug: str) -> tuple[bool, str]:
+    """Whether Claude Code's `modelUsage` shows the asked-for model (a dated id
+    like claude-haiku-4-5-20251001 counts; claude-sonnet-5-5 is not claude-sonnet-5)."""
+    if not isinstance(model_usage, dict) or not model_usage:
+        return True, ""
+    pat = re.compile(rf"{re.escape(model_slug)}(-\d{{8}})?(\[.*\])?")
+    served = ", ".join(sorted(model_usage))
+    return any(pat.fullmatch(k) for k in model_usage), served
+
+
+def _call_claude_code(
+    model_slug: str,
+    prompt: str,
+    *,
+    max_tokens: int,
+    timeout_s: int,
+    effort: str | None,
+    max_retries: int,
+    backoff_base_s: float,
+) -> CallResult:
+    """One model call through `claude -p` (prompt on stdin, lean flags, a fresh
+    empty working dir, credential env vars stripped). Never raises."""
+    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+             "cache_write_tokens": 0, "total_tokens": 0}
+    cmd = ["claude", "-p", "--model", model_slug, *CLAUDE_CODE_FLAGS,
+           "--system-prompt", SYSTEM_PROMPT]
+    if effort:
+        cmd += ["--effort", effort]
+    env = _claude_code_env(max_tokens)
+
+    last_err: str | None = None
+    attempt = 0
+    for attempt in range(1, max_retries + 1):
+        retryable = False
+        t0 = time.time()
+        try:
+            with tempfile.TemporaryDirectory(prefix="gate1-cc-") as cwd:
+                proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                      timeout=timeout_s, cwd=cwd, env=env)
+            latency = time.time() - t0
+        except subprocess.TimeoutExpired:
+            last_err, retryable = f"claude -p timed out after {timeout_s}s", True
+        except FileNotFoundError:
+            return CallResult(usage, attempt, 0.0, "", None,
+                              "Claude Code CLI `claude` not found on PATH")
+        except OSError as exc:
+            last_err = f"claude -p failed to start: {exc}"
+        else:
+            try:
+                out = json.loads(proc.stdout)
+                if not isinstance(out, dict):
+                    raise ValueError("not a JSON object")
+            except ValueError:
+                tail = (proc.stderr or proc.stdout or "").strip()[-300:]
+                last_err = (f"claude -p exit {proc.returncode}, non-JSON output: {tail!r}"
+                            if proc.stdout.strip() else
+                            f"claude -p exit {proc.returncode} with no output: {tail!r}")
+            else:
+                result = out.get("result") if isinstance(out.get("result"), str) else ""
+                if out.get("is_error"):
+                    status = out.get("api_error_status")
+                    msg = f"claude -p error (api_error_status={status}): {result[:300]}"
+                    if _CC_LIMIT_RE.search(result):
+                        return CallResult(usage, attempt, latency, "", None, msg,
+                                          provider="claude-code",
+                                          stop_run=f"Claude Code subscription usage limit "
+                                                   f"reached: {result[:300]}")
+                    last_err = msg
+                    retryable = status in _CC_RETRY_STATUS or "overloaded" in result.lower()
+                else:
+                    u = out.get("usage") or {}
+                    cr = int(u.get("cache_read_input_tokens") or 0)
+                    cw = int(u.get("cache_creation_input_tokens") or 0)
+                    i = int(u.get("input_tokens") or 0) + cr + cw    # the whole prompt
+                    o = int(u.get("output_tokens") or 0)
+                    usage = {"input_tokens": i, "output_tokens": o, "cache_read_tokens": cr,
+                             "cache_write_tokens": cw, "total_tokens": i + o}
+                    stop = out.get("stop_reason")
+                    finish_reason = {"end_turn": "stop", "max_tokens": "length"}.get(stop, stop)
+                    cost = out.get("total_cost_usd")
+                    estimate = float(cost) if isinstance(cost, (int, float)) else None
+                    ok_model, served = _served_models_match(out.get("modelUsage"), model_slug)
+                    text = result if result.strip() else ""
+                    if not ok_model:
+                        # never score a different model's answer
+                        text, err = "", f"served by {served}, asked for {model_slug}"
+                    elif not text:
+                        err = f"empty completion (finish_reason={finish_reason})"
+                    else:
+                        err = None
+                    return CallResult(usage, attempt, latency, text, finish_reason, err,
+                                      provider="claude-code", cost_estimate_usd=estimate)
+        if not retryable or attempt >= max_retries:
+            break
+        time.sleep(min(backoff_base_s * (2 ** (attempt - 1)), 60.0))
+
+    return CallResult(usage, attempt, 0.0, "", None, last_err)
+
+
 def call_model(
     model_slug: str,
     prompt: str,
@@ -333,6 +522,9 @@ def call_model(
       responses` speaks the OpenAI Responses API (Go serves GPT Luna / Grok /
       Muse Spark only at `/v1/responses`), `family: messages` speaks the
       Anthropic messages API (Go's MiniMax / Qwen3.x at `/v1/messages`).
+      `family: claude-code` calls the Claude Code CLI (`claude -p`) on the
+      personal subscription (see _call_claude_code); only its `effort` from
+      `reasoning` is used.
       The gateway itself is already a single
       provider, so no provider pinning, usage-cost request or reasoning
       preferences are sent (they are OpenRouter-specific extensions). Go asks
@@ -348,6 +540,13 @@ def call_model(
     if dry_run:
         # Build the payload shape without hitting the network.
         return CallResult(usage, 0, 0.0, "", None, None)
+
+    if api is not None and api.family == "claude-code":
+        # The CLI, not litellm: no key, no OpenRouter extensions, no temperature.
+        return _call_claude_code(
+            model_slug, prompt, max_tokens=max_tokens, timeout_s=timeout_s,
+            effort=_claude_code_effort(reasoning), max_retries=max_retries,
+            backoff_base_s=backoff_base_s)
 
     try:
         import litellm  # lazy import
@@ -509,9 +708,13 @@ def run_case(
     prompt = build_prompt(case_id)
     api = cfg.api_for(model)
     # OpenRouter provider pinning / reasoning prefs only apply to OpenRouter
-    # models; a gateway like OpenCode Go is already one provider.
+    # models; a gateway like OpenCode Go is already one provider. The Claude
+    # Code CLI takes the suite's thinking effort as `--effort`.
     provider_prefs = cfg.provider_for(pair_id) if api is None else None
     reasoning_prefs = cfg.reasoning if api is None else None
+    if api is not None and api.family == "claude-code":
+        effort = _claude_code_effort(cfg.reasoning)
+        reasoning_prefs = {"effort": effort} if effort else None
     call = call_model(
         model.id,
         prompt,
@@ -527,6 +730,8 @@ def run_case(
         session=run_id,
         extra_params=model.params,
     )
+    if call.stop_run:
+        raise UsageLimitReached(call.stop_run)
     usage, attempts, latency, text, finish_reason, err = call[:6]
     result = RunResult(
         pair_id=pair_id,
@@ -552,6 +757,7 @@ def run_case(
         reasoning_tokens=call.reasoning_tokens,
         provider=call.provider,
         billed_cost_usd=call.billed_cost_usd,
+        cost_estimate_usd=call.cost_estimate_usd,
         **usage,
     )
     if not dry_run:  # a dry run's empty output must never become "the latest run"
@@ -568,9 +774,18 @@ def run_pair(
     run_id: str | None = None,
 ) -> list[RunResult]:
     """Run every (case, model, repeat) of a pair. All files share ONE run id,
-    taken once at the start, so a run that crosses midnight UTC stays whole."""
+    taken once at the start, so a run that crosses midnight UTC stays whole.
+
+    A Claude Code pair is checked once, before any call, to be logged in with
+    the claude.ai subscription (raises ClaudeCodeNotReady). Hitting the
+    subscription usage limit raises UsageLimitReached; runs already written
+    are kept.
+    """
     pair = cfg.get_pair(pair_id)
     run_id = run_id or new_run_id()
+    if not dry_run and any((api := cfg.api_for(m)) is not None and api.family == "claude-code"
+                           for m in (pair.current, pair.target)):
+        claude_code_preflight()
     results: list[RunResult] = []
     for case_id in cfg.selected_cases(case):
         for model, role in ((pair.current, "current"), (pair.target, "target")):
@@ -616,8 +831,17 @@ def main(argv: list[str] | None = None) -> int:
     run_id = new_run_id()
     print(f"run id: {run_id}  suite: {cfg.suite}", file=sys.stderr)
     for pid in pair_ids:
-        run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats,
-                 run_id=run_id)
+        try:
+            run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats,
+                     run_id=run_id)
+        except ClaudeCodeNotReady as exc:
+            print(f"[{pid}] not run: {exc}", file=sys.stderr)
+            return 2
+        except UsageLimitReached as exc:
+            print(f"[{pid}] stopped: {exc}. Runs written so far are kept (run id {run_id}); "
+                  "this is a partial run, not a scorecard. Re-run after the limit resets.",
+                  file=sys.stderr)
+            return 3
     return 0
 
 

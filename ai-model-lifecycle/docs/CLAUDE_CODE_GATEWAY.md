@@ -1,6 +1,6 @@
 # Plan: run the Claude pairs through Claude Code (personal subscription)
 
-Status: **plan, not built** · written 2026-10-15 · owner: Abraham Lock
+Status: **built, offline tests only; not run live yet** (2026-10-16, `tests/test_claude_code_gateway.py`) · written 2026-10-15 · owner: Abraham Lock
 
 ## Paste this into Claude Code to start
 
@@ -64,10 +64,17 @@ Also verified with the lean flags:
   `output_tokens`), `modelUsage` (keyed by model id), `total_cost_usd`, `duration_ms`,
   `duration_api_ms`, `num_turns`, `session_id`.
 
+Checked 2026-10-16 (Claude Code 2.1.301, docs only, no model call):
+- The output limit is the env var `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+  (https://code.claude.com/docs/en/env-vars). Claude Code lowers a value above a
+  model's cap to the cap. The runner sets it to `max_tokens`.
+- More credential variables than listed in 4.2 can move the CLI off the
+  subscription (`ANTHROPIC_FOUNDRY_*`, `ANTHROPIC_AWS_*`, `ANTHROPIC_BEDROCK_*`,
+  `ANTHROPIC_VERTEX_*`, `AWS_BEARER_TOKEN_BEDROCK`). The runner strips those too.
+
 Not verified yet (check before relying on it):
-- How to set the output limit. Probably the env var `CLAUDE_CODE_MAX_OUTPUT_TOKENS`;
-  confirm in the Claude Code docs and with a short call.
-- The exact error JSON when the subscription usage limit is hit.
+- The exact error JSON when the subscription usage limit is hit. The runner
+  stops on `"usage limit"` / `"rate limit"` / `"hit your limit"` in an error `result`.
 - Whether `usage` reports thinking tokens separately (so far it doesn't).
 
 ## 3. Config changes
@@ -257,7 +264,7 @@ Not part of this change, but found in the same review:
    OpenAI-style / Responses / DeepSeek usage already includes cached tokens in
    `input_tokens`. Affects the Go pairs (no billed cost). Fix: price
    `input − cache_read` at the input price.
-2. **GLM thinking can be graded as the answer.** The chat route's empty-content
+2. **Done (#23).** **GLM thinking can be graded as the answer.** The chat route's empty-content
    fallback now reads `reasoning_content`, against the `models.yaml` comment ("never
    graded as the answer"). Decide which is intended; most likely, treat a
    reasoning-only reply as an empty answer (error).

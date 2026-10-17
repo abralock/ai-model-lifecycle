@@ -28,7 +28,8 @@ Each part compares the target with the current model, scaled so that "the same" 
 - **Inputs** come from the same run: pass rate = passes ÷ scored runs (12 per model
   with 4 tasks × 3 repeats); cost per task = total billed cost ÷ scored runs; time per
   task = mean response time. Runs whose API call failed ("infra errors") are left out
-  of all three.
+  of all three. What "response time" covers (one request per assignment, thinking
+  included, grading and retries excluded): [docs/LATENCY.md](docs/LATENCY.md).
 
 ## The cap: cost and time count between 50 and 150
 

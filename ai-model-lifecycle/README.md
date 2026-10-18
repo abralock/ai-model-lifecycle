@@ -20,7 +20,9 @@ To browse results in a web UI with history and side-by-side compare, see
 **[MLFLOW.md](MLFLOW.md)** (optional; `runs/` stays the source of truth).
 
 How the overall score and verdict in `REPORT.md` are calculated, with worked
-examples: **[SCORING.md](SCORING.md)**.
+examples: **[SCORING.md](SCORING.md)**. What the Time axis measures (one
+request per assignment, thinking included; grading and retries excluded):
+**[docs/LATENCY.md](docs/LATENCY.md)**.
 
 Short version (Docker running, Python 3.11+):
 
@@ -106,6 +108,33 @@ differences:
 
 To add another Go pair, copy an existing one in `models.yaml` and add the
 models' Go list prices to `pricing.py` — no code changes needed.
+
+## Claude Code (personal subscription)
+
+Pairs ending in `-cc` (`opus-4.8-vs-5.5-cc`, `sonnet-5-vs-5.5-cc`,
+`sonnet-4.6-vs-5.5-cc`, `haiku-4.5-vs-5.5-cc`) run the same Claude models
+through the Claude Code CLI (`claude -p`) on the owner's **personal claude.ai
+subscription** instead of OpenRouter. Personal use only — plan, verified CLI
+behavior and open questions: **[docs/CLAUDE_CODE_GATEWAY.md](docs/CLAUDE_CODE_GATEWAY.md)**.
+Same cases, scorers and scorecard math; the differences:
+
+- **No key.** The CLI's own login is used. The runner refuses to start unless
+  `claude auth status` reports `authMethod: "claude.ai"`, and it strips API /
+  cloud-provider credential variables from the CLI's environment, so a run can
+  never bill an API account by accident.
+- **Cost is an estimate**, not a bill: Claude Code's `total_cost_usd` at API
+  list prices, recorded as `cost_estimate_usd` (`billed_cost_usd` stays null).
+  The `Cost source` line reads `Claude Code estimate at API prices (12/12)`.
+- **Subscription usage limit:** hitting it stops the whole run (exit code 3).
+  Runs already written are kept, but that is a partial run, not a scorecard;
+  re-run after the limit resets.
+- **Output-limit handling:** an answer that runs past the output limit is
+  recorded as cut off (`finish_reason: length`, scored as a FAIL) — Claude Code
+  otherwise continues it over several requests and returns only the last part.
+  Each run file records `num_turns` and `duration_api_ms`.
+- `-cc` scorecards are a **different measurement** (Claude Code's own request,
+  no temperature control, cache behavior the harness doesn't control). Never
+  compare them number-for-number with the OpenRouter scorecards.
 
 ## Layout (pilot)
 - `models.yaml` — candidate matrix (pair-agnostic; add pairs to scale to 7)

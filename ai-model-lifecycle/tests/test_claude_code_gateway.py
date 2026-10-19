@@ -513,3 +513,65 @@ def test_price_reference_kept_for_priced_models():
     md = report.render_pair(cfg, "haiku-4.5-vs-5.5", report.aggregate(runs, score=False), runs,
                             score=False)
     assert "Price reference" in md
+
+
+# --------------------------------------------------------------------------- #
+# answers that hit the output limit (probed 2026-10-17, Claude Code 2.1.301)   #
+# --------------------------------------------------------------------------- #
+# When an answer hits the output limit, Claude Code continues it in further
+# requests on its own (num_turns counts them, up to 4). If one finishes, the
+# CLI's `result` holds only the LAST request's text: a fragment, which once
+# was graded as a whole answer (Sonnet 5.5 r1b, run 20261017T043407Z: 345k
+# input, 132.5k output, 11k chars returned). If none finishes, it gives up
+# with is_error and api_error "max_output_tokens".
+OVER_LIMIT = _error("API Error: Claude's response exceeded the 32000 output token maximum. "
+                    "To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS "
+                    "environment variable.")
+OVER_LIMIT.update(api_error="max_output_tokens", terminal_reason="api_error", num_turns=4,
+                  stop_reason="stop_sequence", total_cost_usd=0.5,
+                  usage={"input_tokens": 400, "cache_creation_input_tokens": 0,
+                         "cache_read_input_tokens": 0, "output_tokens": 128000})
+
+
+def test_continued_answer_is_cut_off_not_graded(claude):
+    claude.replies = [_success(num_turns=3, result="### EDIT: tail-of-the-answer.java")]
+    res = _call()
+    assert res.text == ""                         # the fragment is never graded
+    assert res.finish_reason == "length"
+    assert res.error.startswith("empty completion (finish_reason=length)")
+    assert "3 requests" in res.error
+    # cut off at the output limit is the model's behaviour: a FAIL, not an infra error
+    assert not report.is_infra_error({"ok": False, "error": res.error})
+    assert res.num_turns == 3
+    assert res.cost_estimate_usd == pytest.approx(0.0123)   # usage and cost still recorded
+    assert len(claude.model_calls) == 1           # not retried
+
+
+def test_over_limit_error_is_a_fail_not_infra(claude):
+    claude.replies = [OVER_LIMIT, _success()]
+    res = _call()
+    assert res.text == "" and res.finish_reason == "length"
+    assert res.error.startswith("empty completion (finish_reason=length)")
+    assert not report.is_infra_error({"ok": False, "error": res.error})
+    assert res.usage["output_tokens"] == 128000 and res.cost_estimate_usd == 0.5
+    assert res.num_turns == 4
+    assert len(claude.model_calls) == 1           # not retried: it would hit the limit again
+
+
+def test_single_request_answer_records_turns_timing_and_thinking(claude):
+    usage = dict(_success()["usage"], output_tokens_details={"thinking_tokens": 30})
+    claude.replies = [_success(num_turns=1, usage=usage)]
+    res = _call()
+    assert res.error is None and res.text == ANSWER
+    assert res.num_turns == 1
+    assert res.duration_api_ms == 4000
+    assert res.reasoning_tokens == 30
+
+
+def test_run_case_saves_turns_and_api_duration(claude):
+    claude.replies = [_success(num_turns=1)]
+    cfg = load_config()
+    pair = cfg.get_pair(PAIR)
+    runner.run_case(cfg, PAIR, CASE, pair.target, "target", run_id="20261017T000000Z")
+    saved = json.loads(next(common.RUNS_DIR.rglob("*.json")).read_text())
+    assert saved["num_turns"] == 1 and saved["duration_api_ms"] == 4000

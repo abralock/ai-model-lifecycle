@@ -1,0 +1,578 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Gate 1 Model-Upgrade Harness",
+    "output": "ai-model-lifecycle/docs/architecture/gate1-harness.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/abralock/ai-model-lifecycle.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "ea174eec15c8f00c9c2167d4d60b3e403813336b"
+    }
+  },
+  "components": [
+    {
+      "id": "openrouter",
+      "type": "cloud",
+      "label": "OpenRouter",
+      "sublabel": "pinned to Bedrock",
+      "tag": "billed cost",
+      "pos": [
+        136,
+        40
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 635,
+          "end_line": 647,
+          "label": "openrouter/ route + provider prefs"
+        },
+        {
+          "path": "ai-model-lifecycle/models.yaml",
+          "line": 112,
+          "end_line": 127,
+          "label": "Bedrock pin, temp 0, 32k"
+        }
+      ]
+    },
+    {
+      "id": "opencode",
+      "type": "cloud",
+      "label": "OpenCode Go",
+      "sublabel": "chat/responses/messages",
+      "tag": "price table",
+      "pos": [
+        300,
+        40
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 606,
+          "end_line": 632,
+          "label": "gateway families via litellm"
+        },
+        {
+          "path": "ai-model-lifecycle/models.yaml",
+          "line": 135,
+          "end_line": 149,
+          "label": "opencode-go apis"
+        }
+      ]
+    },
+    {
+      "id": "claudecode",
+      "type": "cloud",
+      "label": "Claude Code CLI",
+      "sublabel": "claude -p, subscription",
+      "tag": "claude.ai auth only",
+      "pos": [
+        464,
+        40
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 379,
+          "end_line": 398,
+          "label": "preflight: refuse non-claude.ai"
+        },
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 431,
+          "end_line": 462,
+          "label": "claude -p, prompt on stdin"
+        },
+        {
+          "path": "ai-model-lifecycle/models.yaml",
+          "line": 150,
+          "end_line": 153
+        }
+      ]
+    },
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "CLI on the dev box",
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 853,
+          "end_line": 891,
+          "label": "runner CLI: --pair --suite --repeats"
+        }
+      ]
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "runner.py",
+      "sublabel": "pair × case × repeat",
+      "tag": "one run id",
+      "pos": [
+        300,
+        220
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 813,
+          "end_line": 847,
+          "label": "run_pair loop"
+        },
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 740,
+          "end_line": 811,
+          "label": "run_case: prompt, call, save"
+        },
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 538,
+          "end_line": 593,
+          "label": "call_model route choice"
+        }
+      ]
+    },
+    {
+      "id": "runs",
+      "type": "database",
+      "label": "runs/<pair>/",
+      "sublabel": "one JSON per call",
+      "pos": [
+        560,
+        220
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/common.py",
+          "line": 274,
+          "end_line": 292,
+          "label": "run_path + save_run"
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "type": "backend",
+      "label": "report.py",
+      "sublabel": "Wilson CI · Fisher p",
+      "pos": [
+        820,
+        220
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/report.py",
+          "line": 148,
+          "end_line": 210,
+          "label": "aggregate + live scoring"
+        },
+        {
+          "path": "ai-model-lifecycle/report.py",
+          "line": 451,
+          "end_line": 469,
+          "label": "overall score + verdict"
+        },
+        {
+          "path": "ai-model-lifecycle/report.py",
+          "line": 510,
+          "end_line": 519,
+          "label": "pick run, write report"
+        }
+      ]
+    },
+    {
+      "id": "reportmd",
+      "type": "database",
+      "label": "REPORT.md",
+      "sublabel": "scorecard, current=100",
+      "pos": [
+        1080,
+        220
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/report.py",
+          "line": 427,
+          "end_line": 440,
+          "label": "weighted overall line"
+        },
+        {
+          "path": "ai-model-lifecycle/report.py",
+          "line": 516,
+          "end_line": 519
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "type": "database",
+      "label": "models.yaml",
+      "sublabel": "pairs · suites · gateways",
+      "pos": [
+        210,
+        400
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/models.yaml",
+          "line": 1,
+          "end_line": 16,
+          "label": "current vs target pairs"
+        },
+        {
+          "path": "ai-model-lifecycle/models.yaml",
+          "line": 155,
+          "end_line": 175,
+          "label": "sanity cases + real suite"
+        },
+        {
+          "path": "ai-model-lifecycle/common.py",
+          "line": 213,
+          "end_line": 262,
+          "label": "load_config"
+        }
+      ]
+    },
+    {
+      "id": "cases",
+      "type": "database",
+      "label": "cases/",
+      "sublabel": "prompt.md + artifacts",
+      "pos": [
+        370,
+        400
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/runner.py",
+          "line": 158,
+          "end_line": 192,
+          "label": "build_prompt inlines artifacts"
+        }
+      ]
+    },
+    {
+      "id": "verify",
+      "type": "backend",
+      "label": "verify_failures.py",
+      "sublabel": "classify each failure",
+      "pos": [
+        560,
+        400
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/verify_failures.py",
+          "line": 140,
+          "end_line": 168,
+          "label": "MODEL / HARNESS? / FLAKY / INFRA"
+        }
+      ]
+    },
+    {
+      "id": "scorers",
+      "type": "backend",
+      "label": "scorers/",
+      "sublabel": "dispatch → r1…r5",
+      "tag": "deterministic",
+      "pos": [
+        820,
+        400
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/scorers/dispatch.py",
+          "line": 19,
+          "end_line": 53,
+          "label": "SCORER_MAP + score_case"
+        }
+      ]
+    },
+    {
+      "id": "toolchain",
+      "type": "cloud",
+      "label": "Docker builds",
+      "sublabel": "Maven · ng build · e2e",
+      "pos": [
+        1080,
+        400
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/scorers/r1_scorer.py",
+          "line": 82,
+          "end_line": 90,
+          "label": "mvn locally or in Docker"
+        },
+        {
+          "path": "ai-model-lifecycle/scorers/r2_scorer.py",
+          "line": 1,
+          "end_line": 23,
+          "label": "ng build + Playwright parity"
+        }
+      ]
+    },
+    {
+      "id": "forks",
+      "type": "external",
+      "label": "Pinned forks",
+      "sublabel": "real suite, SHA-256",
+      "pos": [
+        370,
+        560
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/cases/sources.py",
+          "line": 107,
+          "end_line": 121,
+          "label": "ensure: verify or fetch"
+        },
+        {
+          "path": "ai-model-lifecycle/cases/sources.py",
+          "line": 70,
+          "end_line": 80,
+          "label": "shallow git fetch by SHA"
+        }
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "Postgres 16",
+      "sublabel": "Docker, aidb :5432",
+      "pos": [
+        820,
+        560
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ai-model-lifecycle/docker/docker-compose.yml",
+          "line": 14,
+          "end_line": 30
+        },
+        {
+          "path": "ai-model-lifecycle/scorers/base.py",
+          "line": 439,
+          "end_line": 478,
+          "label": "psql in isolated schema"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Model gateways (per model api:)",
+      "wraps": [
+        "openrouter",
+        "opencode",
+        "claudecode"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "op-run",
+      "from": "operator",
+      "to": "runner",
+      "label": "run pair",
+      "variant": "emphasis"
+    },
+    {
+      "id": "run-or",
+      "from": "runner",
+      "to": "openrouter",
+      "label": "litellm"
+    },
+    {
+      "id": "run-go",
+      "from": "runner",
+      "to": "opencode",
+      "label": "prompt → answer"
+    },
+    {
+      "id": "run-cc",
+      "from": "runner",
+      "to": "claudecode",
+      "label": "stdin JSON",
+      "variant": "security"
+    },
+    {
+      "id": "cfg-run",
+      "from": "config",
+      "to": "runner",
+      "label": "pairs"
+    },
+    {
+      "id": "cases-run",
+      "from": "cases",
+      "to": "runner",
+      "label": "prompt"
+    },
+    {
+      "id": "forks-cases",
+      "from": "forks",
+      "to": "cases",
+      "label": "fetch once"
+    },
+    {
+      "id": "run-runs",
+      "from": "runner",
+      "to": "runs",
+      "label": "save run",
+      "variant": "emphasis"
+    },
+    {
+      "id": "runs-report",
+      "from": "runs",
+      "to": "report",
+      "label": "latest run",
+      "variant": "emphasis"
+    },
+    {
+      "id": "report-md",
+      "from": "report",
+      "to": "reportmd",
+      "label": "write",
+      "variant": "emphasis"
+    },
+    {
+      "id": "report-score",
+      "from": "report",
+      "to": "scorers",
+      "label": "score_case"
+    },
+    {
+      "id": "runs-verify",
+      "from": "runs",
+      "to": "verify",
+      "label": "failed runs"
+    },
+    {
+      "id": "verify-score",
+      "from": "verify",
+      "to": "scorers",
+      "label": "re-score"
+    },
+    {
+      "id": "score-pg",
+      "from": "scorers",
+      "to": "postgres",
+      "label": "psql (r3–r5)"
+    },
+    {
+      "id": "score-tools",
+      "from": "scorers",
+      "to": "toolchain",
+      "label": "r1, r1b, r2"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One evaluation",
+      "items": [
+        "runner.py runs every case × {current, target} × N repeats under one UTC run id",
+        "Each answer is saved raw; nothing is graded at call time",
+        "report.py then re-scores every saved answer with the live scorers"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Time / Quality / Cost",
+      "items": [
+        "Quality: pass rate per model, Wilson CI, Fisher p between models",
+        "Cost: OpenRouter billed cost, else pricing.py token prices",
+        "Overall score is weighted with current = 100"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Guard rails",
+      "items": [
+        "Claude Code route refuses to start unless logged in via claude.ai",
+        "Both models of a pair share one provider; real-suite sources are SHA-256 locked",
+        "Failures are reported only with verify_failures.py evidence"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Optional",
+      "items": [
+        "mlflow_export.py copies runs and scores into MLflow; runs/ stays the source of truth",
+        "--suite real swaps in whole codebases (r1b, r2) and writes REPORT.real.md"
+      ]
+    }
+  ]
+}

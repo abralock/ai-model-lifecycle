@@ -1,7 +1,8 @@
 # Project Overview — ai-model-lifecycle (Gate 1)
 
-> Reading notes taken on 2026-10-15. For how to operate the harness, see
-> `README.md`, `RUN_AT_HOME.md`, `SCORING.md` and the `gate1-eval` skill.
+> Reading notes taken on 2026-10-15, updated 2026-10-18 after the Claude Code
+> gateway runs. For how to operate the harness, see `README.md`,
+> `RUN_AT_HOME.md`, `SCORING.md`, `docs/LATENCY.md` and the `gate1-eval` skill.
 
 ## What this is
 
@@ -16,7 +17,7 @@ verification, later).
 
 | Path | Role |
 |---|---|
-| `runner.py` | litellm harness: temp=0, 32k max_tokens (128k for `real` suite), retry/backoff, per-run UTC run ids. OpenRouter pairs pinned to Amazon Bedrock (no fallbacks) so both models share infrastructure; `api: opencode-go` pairs go through the OpenCode Go subscription instead. |
+| `runner.py` | litellm harness: temp=0, 32k max_tokens (128k for `real` suite), retry/backoff, per-run UTC run ids. OpenRouter pairs pinned to Amazon Bedrock (no fallbacks) so both models share infrastructure; `api: opencode-go` pairs go through the OpenCode Go subscription instead; `api: claude-code` pairs (`*-cc`) call the Claude Code CLI on the owner's claude.ai subscription (pre-flight auth check, credential env vars stripped, cost recorded as an estimate — see `docs/CLAUDE_CODE_GATEWAY.md`). |
 | `models.yaml` | Pair matrix (`current` vs `target`), run defaults, gateway config, case lists per suite. |
 | `cases/` | Frozen golden tasks (see below). |
 | `scorers/` | Deterministic per-case checkers + `dispatch.py`. |
@@ -25,6 +26,7 @@ verification, later).
 | `pricing.py` | Token price table (fallback when no billed cost; the source for Go pairs). |
 | `mlflow_export.py` | Optional copy of results into MLflow (`runs/` stays source of truth). |
 | `docker/` | Postgres 16 for the DB cases. |
+| `docs/` | `CLAUDE_CODE_GATEWAY.md` (the claude-code gateway: plan, verified CLI behavior, open questions), `LATENCY.md` (what "time per task" measures), this overview. |
 
 ## The tasks (cases)
 
@@ -73,3 +75,31 @@ Notable config notes:
 - `deepseek-v4.1-flash-vs-v4-pro` pair is configured but has no runs yet.
 - GPT Sol/Terra pairs from the plan are still commented out in `models.yaml`
   (check provider availability for both models before enabling).
+
+## Claude Code runs (2026-10-16/17, `*-cc` pairs)
+
+All four Claude pairs re-ran through the Claude Code gateway (PR #25, fix
+PR #30) on both suites — 146 calls on one Pro plan, no usage-limit stop,
+0 infra errors, every failure verified MODEL. Cost is Claude Code's estimate
+at API prices, never a bill; not comparable number-for-number with OpenRouter.
+
+| Pair | Sanity (current → target) | Real suite (current → target) |
+|---|---|---|
+| `sonnet-5-vs-5.5-cc` | 10 → 12 of 12 → **135.0** ✅ | 2 → 2 of 6 → 97.6 (5.5 slower) ⚠️ |
+| `sonnet-4.6-vs-5.5-cc` | 11 → 12 of 12 → **128.7** ✅ | 1 → 3 of 6 → **225.0** ✅ |
+| `haiku-4.5-vs-5.5-cc` | 8 → 7 of 12 → 118.8 but lower pass rate ⚠️ | 0 → 3 of 6 → no overall score; target better (p = 0.18) |
+| `opus-4.8-vs-5.5-cc` | 12 → 12 of 12 → 96.5 (5.5 slower) ⚠️ | 3 → 2 of 6 → 108.3 but lower pass rate ⚠️ |
+
+Verdicts agree with OpenRouter wherever both routes ran, except Haiku on the
+sanity suite (one pass either way, inside the noise). `r1b_jhipster_boot3`
+remains 0/3 for **every model on every route** — the scorer passes a reference
+answer (`tests/test_r1b_reference_slow.py`), so these are model failures
+(missing dependency versions after the JHipster 8 BOM switch; one Sonnet 5
+answer imports a BOM version that does not exist).
+
+Gateway behavior worth knowing (details in `docs/CLAUDE_CODE_GATEWAY.md`):
+an answer that hits the output limit is continued by Claude Code and only the
+last part returned — recorded as cut off (`finish_reason: length`, a FAIL)
+since PR #30; a couple of calls sent the prompt twice (internal retry),
+inflating that call's time/cost — run files now record `num_turns` and
+`duration_api_ms` to make that visible.

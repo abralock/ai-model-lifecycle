@@ -42,6 +42,19 @@ def test_repo_config_cross_gateway_pairs():
     assert get_price(pair.target.id) is not DEFAULT_PRICE
 
 
+def test_repo_config_cross_gateway_qwen_pair():
+    cfg = load_config()
+    pair = cfg.get_pair("opus-5.5-cc-vs-qwen3.8-flash")
+    assert cfg.api_for(pair.current).family == "claude-code"
+    # Qwen on Go only speaks the Anthropic messages dialect.
+    tgt_api = cfg.api_for(pair.target)
+    assert tgt_api.id == "opencode-go" and tgt_api.family == "messages"
+    # No thinking params (Qwen ignores them all); slow calls need the floor.
+    assert pair.target.params is None
+    assert cfg.timeout_s_for(pair.id) >= 1200
+    assert get_price(pair.target.id) is not DEFAULT_PRICE
+
+
 # --------------------------------------------------------------------------- #
 # 2. preflight fires on a half-claude-code pair                                #
 # --------------------------------------------------------------------------- #

@@ -77,19 +77,19 @@ def test_dangling_api_reference_fails_loudly(tmp_path):
 
 def test_repo_go_pairs_resolve_and_are_priced():
     """Every keyed-gateway (`api:`) model in the repo models.yaml must resolve
-    its gateway and have a real pricing row (not the conservative DEFAULT_PRICE
-    fallback). Claude Code pairs use the CLI's own login and its cost estimate
-    instead (tests/test_claude_code_gateway.py)."""
+    its gateway, and every model billed from the price table (i.e. not on the
+    claude-code family, whose cost is the CLI's own estimate —
+    tests/test_claude_code_gateway.py) must have a real pricing row, not the
+    conservative DEFAULT_PRICE fallback. Cross-gateway pairs legitimately mix
+    a claude-code model with an OpenCode Go one (tests/test_cross_gateway.py)."""
     cfg = load_config()
-    go_pairs = [p for p in cfg.pairs if (p.current.api or p.target.api)
-                and cfg.api_for(p.target).family != "claude-code"]
-    assert go_pairs, "expected at least one OpenCode Go pair in models.yaml"
-    for pair in go_pairs:
-        for m in (pair.current, pair.target):
-            assert m.api, f"{pair.id}: both models must use the same gateway"
-            api = cfg.api_for(m)
-            assert api is not None and api.base_url and api.api_key_env
-            assert pricing.get_price(m.id) is not pricing.DEFAULT_PRICE, m.id
+    go_models = [(p, m) for p in cfg.pairs for m in (p.current, p.target)
+                 if m.api and cfg.api_for(m).family != "claude-code"]
+    assert go_models, "expected at least one OpenCode Go model in models.yaml"
+    for pair, m in go_models:
+        api = cfg.api_for(m)
+        assert api is not None and api.base_url and api.api_key_env, (pair.id, m.id)
+        assert pricing.get_price(m.id) is not pricing.DEFAULT_PRICE, m.id
 
 
 # --------------------------------------------------------------------------- #

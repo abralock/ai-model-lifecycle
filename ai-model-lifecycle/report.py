@@ -342,7 +342,20 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     lines.append(f"| Cost / run (USD) | ${cur.mean_cost:.4f} | ${tgt.mean_cost:.4f} | "
                  f"{_delta(cur.mean_cost, tgt.mean_cost, higher_better=False)} |")
     lines.append("")
-    if set(cur.providers) != set(tgt.providers) or len(cur.providers) > 1 or len(tgt.providers) > 1:
+    # A pair whose models are CONFIGURED on different gateways (closed-weight
+    # via Claude Code vs open-weight via OpenCode Go) compares routes by
+    # design: explain that instead of advising to pin one provider. A mix of
+    # providers *within* one model's runs still warns either way.
+    cross_gateway = (pair.current.api or "") != (pair.target.api or "")
+    mixed_within = len(cur.providers) > 1 or len(tgt.providers) > 1
+    if cross_gateway:
+        lines.append(f"> Cross-gateway pair (by design): current runs via "
+                     f"**{pair.current.api or 'OpenRouter'}**, target via "
+                     f"**{pair.target.api or 'OpenRouter'}**. Quality is like-for-like (same "
+                     "tasks, same scorers). Time and Cost compare each model **on its own "
+                     "route** — two services with different cost bases — not two models on "
+                     "shared infrastructure.\n")
+    if mixed_within or (not cross_gateway and set(cur.providers) != set(tgt.providers)):
         lines.append("> ⚠️ Current and target ran on **different providers** (or a mix). The Time "
                      "comparison partly measures provider speed, not model speed. Pin one provider "
                      "in `models.yaml` (`defaults.provider`) and re-run.\n")
@@ -420,8 +433,14 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
         lines.append("### Price reference (USD / 1M tokens, `pricing.py`; used only when no billed cost)\n")
         lines.append("| Model | input | output | cache-read | cache-write |")
         lines.append("|---|---:|---:|---:|---:|")
-        lines.append(f"| {pair.current.name} | {pc.input} | {pc.output} | {pc.cache_read} | {pc.cache_write} |")
-        lines.append(f"| {pair.target.name} | {pt.input} | {pt.output} | {pt.cache_read} | {pt.cache_write} |")
+        for mref, price, agg in ((pair.current, pc, cur), (pair.target, pt, tgt)):
+            if price is DEFAULT_PRICE and not _table_runs(agg):
+                # No pricing row and no run priced from the table (e.g. the
+                # Claude Code side of a cross-gateway pair, costed by the
+                # CLI's estimate): a DEFAULT_PRICE row would be misleading.
+                continue
+            lines.append(f"| {mref.name} | {price.input} | {price.output} | "
+                         f"{price.cache_read} | {price.cache_write} |")
         lines.append("")
 
     # ---- weighted overall (normalized to current = 100) ------------------- #

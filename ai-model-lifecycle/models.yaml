@@ -108,6 +108,26 @@ pairs:
     current: {id: claude-haiku-4-5,  name: "Claude Haiku 4.5 (CC)",  api: claude-code}
     target:  {id: claude-haiku-5-5,  name: "Claude Haiku 5.5 (CC)",  api: claude-code}
 
+# --- Cross-gateway pairs: closed-weight vs open-weight -------------------------
+# A closed-weight Claude model on the claude.ai subscription (api:
+# claude-code) vs an open-weight model on the OpenCode Go subscription
+# (api: opencode-go) — same tasks, same scorers. Quality is
+# like-for-like; Time and Cost compare each model ON ITS OWN ROUTE (two
+# subscriptions with different cost bases: Claude Code's estimate at API list
+# prices vs Go list prices from pricing.py), and the scorecard says so instead
+# of warning about mixed providers. Needs both sides ready: `claude auth
+# status` logged in via claude.ai AND OPENCODE_GO_API_KEY in .env. A Claude
+# Code usage limit stops the run (exit 3, partial run kept); a Go 429 is an
+# infra error. Thinking is asymmetric by nature here: GLM-5.x on Go is
+# thinking-ONLY and needs reasoning_effort: low or it burns the output budget
+# (see glm-5.2-vs-5.3); the Claude side keeps Claude Code's default.
+  - id: opus-5.5-cc-vs-glm-5.3
+    current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
+    target:  {id: glm-5.3, name: "GLM-5.3", api: opencode-go, params: {reasoning_effort: low}}
+# Matched-capability pairs that work the same way with no code change (enable
+# when there's budget to run them): claude-haiku-5-5 vs glm-5.3-flash
+# (small vs small) and claude-sonnet-5-5 vs deepseek-v4-pro (mid vs mid).
+
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:
   # OpenRouter provider routing, sent on every call. Pin ONE provider with

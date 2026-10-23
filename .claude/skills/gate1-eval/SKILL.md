@@ -26,6 +26,12 @@ environment active (`source .venv/bin/activate`). Setup from scratch:
    `verify_failures.py` and read the evidence before reporting results.
 5. **Both models must run on the same provider.** Check `Provider (runs)` in the
    report; otherwise time and cost compare providers, not models.
+   Exception: **cross-gateway pairs** (closed-weight via Claude Code vs
+   open-weight via OpenCode Go, e.g. `opus-5.5-cc-vs-glm-5.3`) mix gateways by
+   design; the report prints a "Cross-gateway pair" note instead of the
+   provider warning. Quality is like-for-like; time and cost compare each
+   model on its own route (two subscriptions, two cost bases) — say so when
+   reporting, and never present their cost delta as a like-for-like bill.
 6. **Cost must be billed.** `Cost source` should say `billed by OpenRouter (12/12)`.
    Exception: OpenCode Go pairs (`api: opencode-go` in models.yaml) have no billed
    cost — `price table (pricing.py)` is correct there (Go list prices, charged

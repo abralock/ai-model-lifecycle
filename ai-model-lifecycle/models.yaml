@@ -124,6 +124,18 @@ pairs:
   - id: opus-5.5-cc-vs-glm-5.3
     current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
     target:  {id: glm-5.3, name: "GLM-5.3", api: opencode-go, params: {reasoning_effort: low}}
+  # Qwen3.8 Flash on Go is served ONLY over the Anthropic messages API
+  # (family: messages, same as the qwen3.8-flash-vs-glm-5.3-flash pair) and
+  # thinks heavily while ignoring every thinking control, so no params are
+  # sent and the pair needs a timeout floor well above the 600s default.
+  # 1200s was not enough: sanity run 20261023T020627Z lost two Qwen calls
+  # (r3/r4 first repeats) to client timeouts at exactly 1200s, so the floor
+  # matches the real suite's 1800s (which still applies there, with its 32k
+  # qwen output cap).
+  - id: opus-5.5-cc-vs-qwen3.8-flash
+    timeout_s: 1800
+    current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
+    target:  {id: qwen3.8-flash, name: "Qwen3.8 Flash", api: opencode-go, family: messages}
 # Matched-capability pairs that work the same way with no code change (enable
 # when there's budget to run them): claude-haiku-5-5 vs glm-5.3-flash
 # (small vs small) and claude-sonnet-5-5 vs deepseek-v4-pro (mid vs mid).

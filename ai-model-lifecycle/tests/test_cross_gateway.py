@@ -42,6 +42,17 @@ def test_repo_config_cross_gateway_pairs():
     assert get_price(pair.target.id) is not DEFAULT_PRICE
 
 
+def test_repo_config_cross_gateway_deepseek_pair():
+    cfg = load_config()
+    pair = cfg.get_pair("sonnet-5.5-cc-vs-deepseek-v4-pro")
+    assert cfg.api_for(pair.current).family == "claude-code"
+    # DeepSeek on Go speaks the default chat dialect, no thinking params.
+    tgt_api = cfg.api_for(pair.target)
+    assert tgt_api.id == "opencode-go" and tgt_api.family == "chat"
+    assert pair.target.params is None
+    assert get_price(pair.target.id) is not DEFAULT_PRICE
+
+
 def test_repo_config_cross_gateway_qwen_pair():
     cfg = load_config()
     pair = cfg.get_pair("opus-5.5-cc-vs-qwen3.8-flash")

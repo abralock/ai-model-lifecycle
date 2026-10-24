@@ -142,9 +142,11 @@ pairs:
   - id: sonnet-5.5-cc-vs-deepseek-v4-pro
     current: {id: claude-sonnet-5-5, name: "Claude Sonnet 5.5 (CC)", api: claude-code}
     target:  {id: deepseek-v4-pro, name: "DeepSeek V4 Pro", api: opencode-go}
-# Matched-capability pair that works the same way with no code change (enable
-# when there's budget to run it): claude-haiku-5-5 vs glm-5.3-flash
-# (small vs small).
+  # Flash-tier matched pair (small vs small). GLM-5.x on Go is thinking-only
+  # and needs reasoning_effort: low, same as the other GLM pairs.
+  - id: haiku-5.5-cc-vs-glm-5.3-flash
+    current: {id: claude-haiku-5-5, name: "Claude Haiku 5.5 (CC)", api: claude-code}
+    target:  {id: glm-5.3-flash, name: "GLM-5.3 Flash", api: opencode-go, params: {reasoning_effort: low}}
 
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:

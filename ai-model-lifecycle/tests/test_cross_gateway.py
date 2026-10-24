@@ -42,6 +42,17 @@ def test_repo_config_cross_gateway_pairs():
     assert get_price(pair.target.id) is not DEFAULT_PRICE
 
 
+def test_repo_config_cross_gateway_glm_flash_pair():
+    cfg = load_config()
+    pair = cfg.get_pair("haiku-5.5-cc-vs-glm-5.3-flash")
+    assert cfg.api_for(pair.current).family == "claude-code"
+    tgt_api = cfg.api_for(pair.target)
+    assert tgt_api.id == "opencode-go" and tgt_api.family == "chat"
+    # GLM-5.x on Go is thinking-only: low effort or it burns the output budget.
+    assert pair.target.params == {"reasoning_effort": "low"}
+    assert get_price(pair.target.id) is not DEFAULT_PRICE
+
+
 def test_repo_config_cross_gateway_deepseek_pair():
     cfg = load_config()
     pair = cfg.get_pair("sonnet-5.5-cc-vs-deepseek-v4-pro")

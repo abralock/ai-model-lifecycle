@@ -147,6 +147,12 @@ pairs:
   - id: haiku-5.5-cc-vs-glm-5.3-flash
     current: {id: claude-haiku-5-5, name: "Claude Haiku 5.5 (CC)", api: claude-code}
     target:  {id: glm-5.3-flash, name: "GLM-5.3 Flash", api: opencode-go, params: {reasoning_effort: low}}
+  # Flagship-tier matched pair: Opus 5.5 vs Kimi K3 (Go chat family, no
+  # special params) — at $3/$15 list, the only open model priced at Opus's
+  # tier, so cost/run is directly comparable for once.
+  - id: opus-5.5-cc-vs-kimi-k3
+    current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
+    target:  {id: kimi-k3, name: "Kimi K3", api: opencode-go}
 
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:

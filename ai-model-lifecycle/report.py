@@ -174,7 +174,10 @@ def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
         # estimate at API list prices, else the price table
         billed = rec.get("billed_cost_usd")
         estimate = rec.get("cost_estimate_usd")
-        if isinstance(billed, (int, float)):
+        # OpenCode Go returns usage.cost = 0 for some models (first seen with
+        # Kimi K3): on a quota subscription zero means "no billing info", not
+        # a free call, so only a positive amount counts as billed.
+        if isinstance(billed, (int, float)) and billed > 0:
             a.cost_usd += float(billed)
             a.billed_runs += 1
         elif isinstance(estimate, (int, float)):

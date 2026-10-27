@@ -664,6 +664,10 @@ def call_model(
     for attempt in range(1, max_retries + 1):
         t0 = time.time()
         try:
+            # max_retries=0 everywhere: litellm's underlying OpenAI client
+            # retries timeouts twice on its own (3 hidden attempts per call),
+            # multiplying a dead call's wall time; this loop is the only retry
+            # authority.
             if use_responses_api:
                 resp = litellm.responses(
                     model=model_str,
@@ -671,15 +675,43 @@ def call_model(
                     temperature=temperature,
                     max_output_tokens=max_tokens,
                     timeout=timeout_s,
+                    max_retries=0,
                     **call_kwargs,
                 )
+            elif api is not None:
+                # Keyed gateways stream. Go's non-streaming path can accept a
+                # request and never send a byte (first seen 2026-10-26: Kimi K3
+                # on r1b — ~73k-token prompt + max_tokens=128000 stalled
+                # forever, while the same request streamed its first chunk in
+                # under 2 s). Streaming sidesteps that buffering path and makes
+                # timeout_s a between-chunks timeout: a healthy long call
+                # survives, a stalled one fails at timeout_s.
+                chunks = list(litellm.completion(
+                    model=model_str,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout_s,
+                    max_retries=0,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    **call_kwargs,
+                ))
+                resp = litellm.stream_chunk_builder(chunks, messages=messages)
+                if resp is None:
+                    return CallResult(usage, attempt, time.time() - t0, "", None,
+                                      "empty stream (no chunks returned)",
+                                      provider=served_by)
             else:
+                # OpenRouter billing (usage.cost) rides on the non-streaming
+                # response, so this route keeps its transport.
                 resp = litellm.completion(
                     model=model_str,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     timeout=timeout_s,
+                    max_retries=0,
                     **call_kwargs,
                 )
             latency = time.time() - t0

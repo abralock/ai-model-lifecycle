@@ -29,12 +29,22 @@ ANSWER = "### FILE: x.sql\n```sql\nSELECT 1;\n```\n"
 
 
 def _fake_litellm(message: types.SimpleNamespace, finish_reason: str) -> types.SimpleNamespace:
-    def completion(**_kw):
-        return types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=message, finish_reason=finish_reason)],
-            usage={"prompt_tokens": 100, "completion_tokens": 32000, "total_tokens": 32100,
-                   "completion_tokens_details": {"reasoning_tokens": 31000}})
-    return types.SimpleNamespace(drop_params=False, completion=completion)
+    resp = types.SimpleNamespace(
+        choices=[types.SimpleNamespace(message=message, finish_reason=finish_reason)],
+        usage={"prompt_tokens": 100, "completion_tokens": 32000, "total_tokens": 32100,
+               "completion_tokens_details": {"reasoning_tokens": 31000}})
+
+    # Gateway calls stream (tests/test_go_gateway.py); this fake returns the
+    # whole response as a single "chunk" and hands it back from the builder.
+    def completion(**kw):
+        return iter([resp]) if kw.get("stream") else resp
+
+    def stream_chunk_builder(chunks, messages=None):
+        chunks = list(chunks)
+        return chunks[0] if chunks else None
+
+    return types.SimpleNamespace(drop_params=False, completion=completion,
+                                 stream_chunk_builder=stream_chunk_builder)
 
 
 def _call(monkeypatch, message, finish_reason="length", api=GO):

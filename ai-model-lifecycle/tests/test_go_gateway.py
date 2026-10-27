@@ -97,15 +97,30 @@ def test_repo_go_pairs_resolve_and_are_priced():
 # --------------------------------------------------------------------------- #
 class _FakeLitellm(types.SimpleNamespace):
     def __init__(self):
-        super().__init__(drop_params=False, calls=[])
+        super().__init__(drop_params=False, calls=[], builder_calls=[])
+        # Sentinel chunks: the production code must hand exactly these to
+        # stream_chunk_builder (they stand in for litellm's stream chunks).
+        self.chunks = ["chunk-1", "chunk-2"]
 
-    def completion(self, **kw):
-        self.calls.append(kw)
+    def _full_response(self):
         msg = types.SimpleNamespace(content="### FILE: x.sql\n```sql\nSELECT 1;\n```\n")
         usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
         return types.SimpleNamespace(
             choices=[types.SimpleNamespace(message=msg, finish_reason="stop")],
             usage=usage)
+
+    def completion(self, **kw):
+        self.calls.append(kw)
+        if kw.get("stream"):
+            return iter(self.chunks)
+        return self._full_response()
+
+    def stream_chunk_builder(self, chunks, messages=None):
+        chunks = list(chunks)
+        self.builder_calls.append((chunks, messages))
+        if not chunks:
+            return None  # the real builder returns None for an empty stream
+        return self._full_response()
 
 
 @pytest.fixture
@@ -143,6 +158,72 @@ def test_go_call_uses_openai_compatible_route(tmp_path, monkeypatch, fake_litell
     assert res.billed_cost_usd is None
     saved = json.loads(next(tmp_path.rglob("*.json")).read_text())
     assert saved["provider"] == "opencode-go" and saved["ok"] is True
+
+
+def test_go_chat_call_streams_and_reassembles(tmp_path, monkeypatch, fake_litellm):
+    """Gateway calls must use streaming transport. Go's non-streaming path can
+    accept a request and never send a byte (first seen 2026-10-26: Kimi K3 on
+    r1b — big prompt + max_tokens=128000; the same request streams fine, first
+    chunk in under 2 s). Streaming also turns the read timeout into a
+    between-chunks timeout, so a healthy long call survives while a stalled
+    one fails at timeout_s instead of hanging forever."""
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    cfg = load_config()
+    pair = cfg.get_pair(PAIR)
+    res = runner.run_case(cfg, PAIR, "r3_oracle_to_postgres", pair.target, "target",
+                          run_id="20261027T000000Z")
+
+    sent = fake_litellm.calls[0]
+    assert sent["stream"] is True
+    assert sent["stream_options"] == {"include_usage": True}
+    # the chunks are reassembled into one response by litellm's builder
+    # (messages are passed so it can count prompt tokens if usage is absent)
+    assert fake_litellm.builder_calls
+    chunks, messages = fake_litellm.builder_calls[0]
+    assert chunks == fake_litellm.chunks
+    assert messages[0]["role"] == "system"
+    assert res.ok and res.output_tokens == 50
+
+
+def test_go_call_sends_no_client_retries(tmp_path, monkeypatch, fake_litellm):
+    """litellm's underlying OpenAI client retries timeouts twice by default
+    (3 hidden attempts per call, measured 2026-10-26: a 45 s timeout raised
+    after 139.8 s). The runner's own retry loop is the only retry authority,
+    so every litellm call must pass max_retries=0."""
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    cfg = load_config()
+    pair = cfg.get_pair(PAIR)
+    runner.run_case(cfg, PAIR, "r3_oracle_to_postgres", pair.target, "target",
+                    run_id="20261027T000000Z")
+    assert fake_litellm.calls[0]["max_retries"] == 0
+
+
+def test_go_empty_stream_is_a_clean_error(tmp_path, monkeypatch, fake_litellm):
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    fake_litellm.chunks = []
+    cfg = load_config()
+    pair = cfg.get_pair(PAIR)
+    res = runner.run_case(cfg, PAIR, "r3_oracle_to_postgres", pair.target, "target",
+                          run_id="20261027T000000Z")
+    assert not res.ok and "empty stream" in (res.error or "")
+
+
+def test_openrouter_route_stays_non_streaming_without_client_retries(
+        tmp_path, monkeypatch, fake_litellm):
+    """OpenRouter billing (usage.cost) rides on the non-streaming response, so
+    the OpenRouter route keeps its transport — only the hidden client retries
+    are turned off there too."""
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    monkeypatch.setenv("OPENROUTER_TOKEN", "sk-or-v1-test")
+    cfg = _cfg(tmp_path)
+    pair = cfg.get_pair("o")
+    res = runner.run_case(cfg, "o", "r3_oracle_to_postgres", pair.target, "target",
+                          run_id="20261027T000000Z")
+    sent = fake_litellm.calls[0]
+    assert "stream" not in sent
+    assert sent["max_retries"] == 0
+    assert res.ok
+    assert not fake_litellm.builder_calls
 
 
 def test_go_call_without_key_is_clean_infra_error(tmp_path, monkeypatch, fake_litellm):
@@ -252,6 +333,16 @@ def test_go_responses_call_uses_responses_api(tmp_path, monkeypatch, fake_respon
     assert res.cache_read_tokens == 40 and res.reasoning_tokens == 20
     saved = json.loads(next(tmp_path.rglob("*.json")).read_text())
     assert saved["provider"] == "opencode-go-responses" and saved["ok"] is True
+
+
+def test_go_responses_call_sends_no_client_retries(tmp_path, monkeypatch,
+                                                   fake_responses_litellm):
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    cfg = load_config()
+    pair = cfg.get_pair(RESPONSES_PAIR)
+    runner.run_case(cfg, RESPONSES_PAIR, "r3_oracle_to_postgres", pair.target, "target",
+                    run_id="20261027T000000Z")
+    assert fake_responses_litellm.calls[0]["max_retries"] == 0
 
 
 def test_responses_usage_and_reasoning_extracted():

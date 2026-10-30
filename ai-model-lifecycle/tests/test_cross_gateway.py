@@ -42,6 +42,57 @@ def test_repo_config_cross_gateway_pairs():
     assert get_price(pair.target.id) is not DEFAULT_PRICE
 
 
+def test_zero_billed_cost_falls_back_to_price_table(tmp_path):
+    # Go returns usage.cost = 0 for some models (Kimi K3). Zero is "no
+    # billing info" on a quota subscription, so the report must price the
+    # run from the table, not call it billed at $0.00.
+    import report as report_mod
+    rec = {
+        "model_slug": "kimi-k3", "case_id": "r3_oracle_to_postgres",
+        "billed_cost_usd": 0.0, "cost_estimate_usd": None,
+        "input_tokens": 1_000_000, "output_tokens": 0,
+        "cache_read_tokens": 0, "cache_write_tokens": 0,
+        "total_tokens": 1_000_000, "latency_s": 1.0,
+        "provider": "opencode-go", "ok": True,
+    }
+    rec["role"] = "target"
+    agg = report_mod.aggregate([rec], score=False)[("kimi-k3", "target")]
+    assert agg.billed_runs == 0
+    assert agg.cost_usd == pytest.approx(3.0)  # 1M input at Kimi K3 list price
+
+
+def test_repo_config_cross_gateway_kimi_pair():
+    cfg = load_config()
+    pair = cfg.get_pair("opus-5.5-cc-vs-kimi-k3")
+    assert cfg.api_for(pair.current).family == "claude-code"
+    tgt_api = cfg.api_for(pair.target)
+    assert tgt_api.id == "opencode-go" and tgt_api.family == "chat"
+    assert pair.target.params is None
+    assert get_price(pair.target.id) is not DEFAULT_PRICE
+
+
+def test_repo_config_cross_gateway_glm_flash_pair():
+    cfg = load_config()
+    pair = cfg.get_pair("haiku-5.5-cc-vs-glm-5.3-flash")
+    assert cfg.api_for(pair.current).family == "claude-code"
+    tgt_api = cfg.api_for(pair.target)
+    assert tgt_api.id == "opencode-go" and tgt_api.family == "chat"
+    # GLM-5.x on Go is thinking-only: low effort or it burns the output budget.
+    assert pair.target.params == {"reasoning_effort": "low"}
+    assert get_price(pair.target.id) is not DEFAULT_PRICE
+
+
+def test_repo_config_cross_gateway_deepseek_pair():
+    cfg = load_config()
+    pair = cfg.get_pair("sonnet-5.5-cc-vs-deepseek-v4-pro")
+    assert cfg.api_for(pair.current).family == "claude-code"
+    # DeepSeek on Go speaks the default chat dialect, no thinking params.
+    tgt_api = cfg.api_for(pair.target)
+    assert tgt_api.id == "opencode-go" and tgt_api.family == "chat"
+    assert pair.target.params is None
+    assert get_price(pair.target.id) is not DEFAULT_PRICE
+
+
 def test_repo_config_cross_gateway_qwen_pair():
     cfg = load_config()
     pair = cfg.get_pair("opus-5.5-cc-vs-qwen3.8-flash")

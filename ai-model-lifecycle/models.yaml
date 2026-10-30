@@ -136,9 +136,23 @@ pairs:
     timeout_s: 1800
     current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
     target:  {id: qwen3.8-flash, name: "Qwen3.8 Flash", api: opencode-go, family: messages}
-# Matched-capability pairs that work the same way with no code change (enable
-# when there's budget to run them): claude-haiku-5-5 vs glm-5.3-flash
-# (small vs small) and claude-sonnet-5-5 vs deepseek-v4-pro (mid vs mid).
+  # Mid-tier matched pair: the recommended closed upgrade (Sonnet 5.5) vs
+  # DeepSeek V4 Pro on Go's default chat family (no thinking params needed,
+  # unlike GLM; see deepseek-v4.1-flash-vs-v4-pro for the model's Go entry).
+  - id: sonnet-5.5-cc-vs-deepseek-v4-pro
+    current: {id: claude-sonnet-5-5, name: "Claude Sonnet 5.5 (CC)", api: claude-code}
+    target:  {id: deepseek-v4-pro, name: "DeepSeek V4 Pro", api: opencode-go}
+  # Flash-tier matched pair (small vs small). GLM-5.x on Go is thinking-only
+  # and needs reasoning_effort: low, same as the other GLM pairs.
+  - id: haiku-5.5-cc-vs-glm-5.3-flash
+    current: {id: claude-haiku-5-5, name: "Claude Haiku 5.5 (CC)", api: claude-code}
+    target:  {id: glm-5.3-flash, name: "GLM-5.3 Flash", api: opencode-go, params: {reasoning_effort: low}}
+  # Flagship-tier matched pair: Opus 5.5 vs Kimi K3 (Go chat family, no
+  # special params) — at $3/$15 list, the only open model priced at Opus's
+  # tier, so cost/run is directly comparable for once.
+  - id: opus-5.5-cc-vs-kimi-k3
+    current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
+    target:  {id: kimi-k3, name: "Kimi K3", api: opencode-go}
 
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:

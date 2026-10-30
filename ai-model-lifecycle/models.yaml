@@ -171,6 +171,10 @@ defaults:
   timeout_s: 600
   max_retries: 5
   backoff_base_s: 2      # exponential: base * 2**attempt, honoring Retry-After
+  # Optional for future runs: record client-observed thinking-stream time on
+  # Claude Code and OpenCode Go (see docs/LATENCY.md). Existing runs cannot be
+  # backfilled. Reasoning effort is exported to MLflow as reasoning_effort.
+  # thinking_time: true
 
 # --- Non-OpenRouter gateways ---------------------------------------------------
 # A model with `api: <name>` is called through that gateway instead of

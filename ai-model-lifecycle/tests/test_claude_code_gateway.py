@@ -16,6 +16,7 @@ All offline: subprocess.run is replaced by a fake, the real CLI is never called.
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 from typing import Any
@@ -106,9 +107,11 @@ def claude(monkeypatch, tmp_path):
     return fake
 
 
-def _call(prompt="the prompt", *, effort=None, max_retries=3, model="claude-haiku-5-5"):
+def _call(prompt="the prompt", *, effort=None, max_retries=3, model="claude-haiku-5-5",
+          measure_thinking=False):
     return runner._call_claude_code(model, prompt, max_tokens=32000, timeout_s=60,
-                                    effort=effort, max_retries=max_retries, backoff_base_s=0.0)
+                                    effort=effort, max_retries=max_retries, backoff_base_s=0.0,
+                                    measure_thinking=measure_thinking)
 
 
 # --------------------------------------------------------------------------- #
@@ -575,3 +578,66 @@ def test_run_case_saves_turns_and_api_duration(claude):
     runner.run_case(cfg, PAIR, CASE, pair.target, "target", run_id="20261017T000000Z")
     saved = json.loads(next(common.RUNS_DIR.rglob("*.json")).read_text())
     assert saved["num_turns"] == 1 and saved["duration_api_ms"] == 4000
+
+
+class _StreamStdin:
+    def __init__(self):
+        self.written = []
+
+    def write(self, text):
+        self.written.append(text)
+
+    def close(self):
+        pass
+
+
+class _FakeStreamProcess:
+    def __init__(self, events):
+        self.stdout = io.StringIO("".join(json.dumps(e) + "\n" for e in events))
+        self.stderr = io.StringIO("")
+        self.stdin = _StreamStdin()
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        pass
+
+
+def test_stream_json_records_thinking_time_and_effort(claude, monkeypatch):
+    events = [
+        {"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "thinking", "thinking": ""}}},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "thinking_delta", "thinking": "plan"}}},
+        {"type": "stream_event", "event": {"type": "content_block_start", "index": 1,
+         "content_block": {"type": "text", "text": ""}}},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "index": 1,
+         "delta": {"type": "text_delta", "text": ANSWER}}},
+        _success(),
+    ]
+    process = _FakeStreamProcess(events)
+    calls = []
+
+    def popen(cmd, **kw):
+        calls.append({"cmd": cmd, **kw})
+        return process
+
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+    times = iter((1.0, 2.0, 6.0, 7.0, 8.0, 9.0))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(times))
+    res = _call("PROMPT-TEXT", effort="medium", measure_thinking=True)
+
+    assert res.error is None and res.text == ANSWER
+    assert res.thinking_time_s == pytest.approx(5.0)
+    cmd = calls[0]["cmd"]
+    assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in cmd and "--include-partial-messages" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "medium"
+    assert process.stdin.written == ["PROMPT-TEXT"]
+
+
+def test_default_json_transport_does_not_invent_thinking_time(claude):
+    claude.replies = [_success()]
+    res = _call()
+    assert res.error is None and res.thinking_time_s is None

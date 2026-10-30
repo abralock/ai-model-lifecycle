@@ -85,6 +85,15 @@ Checked 2026-10-17 (two small Haiku probes):
   and recorded as `reasoning_tokens`. Each run also records `num_turns` and
   `duration_api_ms`.
 
+Optional thinking-time instrumentation (offline-tested; requires a new live smoke
+test before use): set `defaults.thinking_time: true`. The runner then switches model
+calls to `--output-format stream-json --verbose --include-partial-messages`, reads
+partial thinking/text events as they arrive, and records client-observed
+`thinking_time_s`. In this mode `timeout_s` is an inactivity timeout reset by each
+stdout event, so an active long thinking phase is not cut off by a whole-call
+deadline. The default `--output-format json` path is unchanged, and old run files
+cannot be backfilled. See `docs/LATENCY.md`.
+
 Not verified yet (check before relying on it):
 - The exact error JSON when the subscription usage limit is hit. The runner
   stops on `"usage limit"` / `"rate limit"` / `"hit your limit"` in an error `result`.

@@ -82,6 +82,8 @@ class ModelAgg:
     estimate_runs: int = 0          # runs whose cost is Claude Code's estimate (not billed)
     providers: dict[str, int] = field(default_factory=dict)  # provider -> runs
     latency_sum: float = 0.0
+    thinking_time_sum: float = 0.0
+    thinking_time_runs: int = 0       # calls with streaming measurements (legacy runs have none)
     case_results: dict[str, list[int]] = field(default_factory=dict)  # case -> [passes, runs]
     failures: list[tuple[str, str]] = field(default_factory=list)      # (file, reason)
 
@@ -92,6 +94,10 @@ class ModelAgg:
     @property
     def mean_latency(self) -> float:
         return (self.latency_sum / self.runs) if self.runs else 0.0
+
+    @property
+    def mean_thinking_time(self) -> float:
+        return (self.thinking_time_sum / self.thinking_time_runs) if self.thinking_time_runs else 0.0
 
     @property
     def pass_ci(self) -> tuple[float, float]:
@@ -145,6 +151,13 @@ def is_infra_error(rec: dict) -> bool:
     return not rec.get("ok", False) and not err.startswith("empty completion")
 
 
+def reasoning_level(rec: dict) -> str:
+    """Effective reasoning effort recorded on a call, for MLflow filtering."""
+    requested = rec.get("reasoning_requested") or {}
+    effort = requested.get("effort") if isinstance(requested, dict) else None
+    return str(effort) if effort else "not recorded"
+
+
 def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
     """Aggregate run records into {(model_slug, role): ModelAgg}."""
     aggs: dict[tuple[str, str], ModelAgg] = {}
@@ -170,6 +183,10 @@ def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
         a.total_tokens += int(rec.get("total_tokens", 0) or 0)
         a.reasoning_tokens += int(rec.get("reasoning_tokens", 0) or 0)
         a.latency_sum += float(rec.get("latency_s", 0.0) or 0.0)
+        thinking_time = rec.get("thinking_time_s")
+        if isinstance(thinking_time, (int, float)) and not isinstance(thinking_time, bool):
+            a.thinking_time_sum += max(0.0, float(thinking_time))
+            a.thinking_time_runs += 1
         # cost: what OpenRouter billed when recorded, else Claude Code's
         # estimate at API list prices, else the price table
         billed = rec.get("billed_cost_usd")
@@ -310,7 +327,7 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
                      f"target {fmt(limits['target'])}  ")
     thinking = {json.dumps(r.get("reasoning_requested"), sort_keys=True) for r in runs}
     if thinking != {"null"} and runs:
-        lines.append(f"> Thinking budget sent: {', '.join(sorted(thinking))} (models.yaml `reasoning`)  ")
+        lines.append(f"> Thinking budget sent: {', '.join(sorted(thinking))} (recorded per call)  ")
     if skipped:
         lines.append(f"> Newer partial run(s) not scored here: {', '.join(skipped)} "
                      f"(see `report.py --run <id>`).  ")
@@ -340,6 +357,14 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     lines.append(f"| Cost source | {_cost_source(cur)} | {_cost_source(tgt)} | — |")
     lines.append(f"| Time (mean latency, s) | {cur.mean_latency:.2f} | {tgt.mean_latency:.2f} | "
                  f"{_delta(cur.mean_latency, tgt.mean_latency, higher_better=False)} |")
+    if cur.thinking_time_runs or tgt.thinking_time_runs:
+        def thinking_cell(a: ModelAgg) -> str:
+            return (f"{a.mean_thinking_time:.2f} ({a.thinking_time_runs}/{a.runs} measured)"
+                    if a.thinking_time_runs else "n/a")
+        thinking_delta = (_delta(cur.mean_thinking_time, tgt.mean_thinking_time, higher_better=False)
+                          if cur.thinking_time_runs and tgt.thinking_time_runs else "n/a")
+        lines.append(f"| Thinking stream time (mean, s) | {thinking_cell(cur)} | {thinking_cell(tgt)} | "
+                     f"{thinking_delta} |")
     lines.append(f"| Cost (total USD) | ${cur.cost_usd:.4f} | ${tgt.cost_usd:.4f} | "
                  f"{_delta(cur.cost_usd, tgt.cost_usd, higher_better=False)} |")
     lines.append(f"| Cost / run (USD) | ${cur.mean_cost:.4f} | ${tgt.mean_cost:.4f} | "

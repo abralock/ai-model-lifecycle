@@ -38,6 +38,24 @@ The scorecard's **Time (mean latency, s)** row is the average of `latency_s` ove
 of a model's scored runs in one pair: 4 tasks × 3 repeats = 12 runs on the sanity
 suite, 2 tasks × 3 repeats = 6 runs on the real suite.
 
+## Optional thinking-stream time
+
+Set `thinking_time: true` under `defaults:` in `models.yaml` for **future runs** to
+record `thinking_time_s` alongside total latency. OpenCode Go chat/messages streams
+are timestamped at reasoning/content transitions. Claude Code uses opt-in
+`stream-json` with partial messages and timestamps its thinking/text events.
+
+A thinking phase starts at the first reasoning event and ends at the next visible
+answer event (or at end-of-stream when no answer is produced). Multiple phases are
+summed. This is **client-observed reasoning-stream time**, including network and
+gateway waits between events; it is not provider-reported compute time. Existing run
+JSON cannot be backfilled with it.
+
+The effective effort is recorded in `reasoning_requested` and exported to MLflow as
+`reasoning_effort`. Use the same supported effort level on both models when making a
+level-adjusted comparison; a model-specific `params.reasoning_effort` on Go and the
+suite's `reasoning: {effort: ...}` on Claude Code otherwise remain different settings.
+
 ## What it does not measure
 
 This is a **single-shot** benchmark: how long a model takes to write the whole solution

@@ -23,7 +23,7 @@ PAIR = "haiku-4.5-vs-5.5"
 RID = "20261010T000000Z"
 
 
-def _write_run(runs_dir, cfg, *, cases=None, rid=RID):
+def _write_run(runs_dir, cfg, *, cases=None, rid=RID, thinking=False):
     pair = cfg.get_pair(PAIR)
     d = runs_dir / PAIR
     d.mkdir(parents=True, exist_ok=True)
@@ -35,6 +35,10 @@ def _write_run(runs_dir, cfg, *, cases=None, rid=RID):
                    "provider": "Amazon Bedrock", "billed_cost_usd": 0.01 if role == "current" else 0.002,
                    "latency_s": 10.0 if role == "current" else 20.0,
                    "output_text": f"answer {role} {case}", "ok": True, "error": None}
+            if thinking:
+                rec.update(reasoning_requested={"effort": "medium" if role == "current" else "low"},
+                           reasoning_tokens=20 if role == "current" else 30,
+                           thinking_time_s=4.0 if role == "current" else 8.0)
             (d / f"{m.id.replace('/', '__')}.{case}.{rid}.json").write_text(json.dumps(rec))
 
 
@@ -115,6 +119,25 @@ def test_export_logs_parent_and_one_child_per_call(env):
     arts = {a.path for a in mlflow.MlflowClient().list_artifacts(parent.info.run_id)}
     assert {"REPORT.md", "calls.json", "comparison.png"} <= arts
 
+
+def test_export_logs_thinking_time_and_reasoning_effort(env):
+    _write_run(env.runs, env.cfg, thinking=True)
+    assert mlflow_export.export_run(mlflow, env.cfg, PAIR, RID, "local", env.score) == "loaded"
+
+    models = {r.data.tags["role"]: r for r in _runs("model")}
+    assert models["current"].data.params["reasoning_effort"] == "medium"
+    assert models["target"].data.params["reasoning_effort"] == "low"
+    assert models["current"].data.metrics["mean_thinking_time_s"] == pytest.approx(4.0)
+    assert models["target"].data.metrics["mean_thinking_time_s"] == pytest.approx(8.0)
+    assert models["current"].data.metrics["reasoning_tokens"] == 20 * len(env.cfg.cases)
+    assert models["target"].data.metrics["reasoning_tokens"] == 30 * len(env.cfg.cases)
+
+    calls = _runs("call")
+    assert {c.data.params["reasoning_effort"] for c in calls} == {"medium", "low"}
+    for call in calls:
+        expected = 4.0 if call.data.params["role"] == "current" else 8.0
+        assert call.data.metrics["thinking_time_s"] == pytest.approx(expected)
+        assert call.data.metrics["reasoning_tokens"] > 0
 
 
 def test_export_is_idempotent_and_scores_each_answer_once(env):

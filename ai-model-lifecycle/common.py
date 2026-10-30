@@ -156,6 +156,11 @@ class Config:
         return float(self.defaults.get("backoff_base_s", 2))
 
     @property
+    def thinking_time(self) -> bool:
+        """Opt into client-observed thinking-time capture on streaming routes."""
+        return bool(self.defaults.get("thinking_time", False))
+
+    @property
     def reasoning(self) -> dict[str, Any] | None:
         """OpenRouter `reasoning` preferences (e.g. {"max_tokens": 16000}), or None
         to leave each model's default thinking behavior alone."""

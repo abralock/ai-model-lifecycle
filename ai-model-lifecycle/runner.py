@@ -27,11 +27,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -126,6 +128,8 @@ class RunResult:
     duration_api_ms: int | None = None
     # --- timing ---
     latency_s: float = 0.0
+    # Client-observed reasoning-stream time; None on legacy/uninstrumented calls.
+    thinking_time_s: float | None = None
     attempts: int = 0
     # --- payload ---
     prompt: str = ""
@@ -251,6 +255,54 @@ class CallResult(NamedTuple):
     stop_run: str | None = None
     num_turns: int | None = None
     duration_api_ms: int | None = None
+    thinking_time_s: float | None = None
+
+
+class _ThinkingTimer:
+    """Measure client-observed reasoning phases in a streaming response.
+
+    A phase starts at the first reasoning event and ends at the next visible
+    answer event (or at end-of-stream for a thinking-only response). This is
+    stream time, not provider-reported compute time.
+    """
+
+    def __init__(self):
+        self.total = 0.0
+        self.started_at: float | None = None
+        self.seen_reasoning = False
+
+    def reasoning(self, now: float) -> None:
+        self.seen_reasoning = True
+        if self.started_at is None:
+            self.started_at = now
+
+    def answer(self, now: float) -> None:
+        if self.started_at is not None:
+            self.total += max(0.0, now - self.started_at)
+            self.started_at = None
+
+    def finish(self, now: float) -> float | None:
+        self.answer(now)
+        return self.total if self.seen_reasoning else None
+
+
+def _observe_stream_chunk(chunk: Any, timer: _ThinkingTimer, now: float) -> None:
+    """Classify one LiteLLM chat/messages chunk without consuming its payload."""
+    choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
+    if not choices:
+        return
+    choice = choices[0]
+    delta = choice.get("delta") if isinstance(choice, dict) else getattr(choice, "delta", None)
+    if delta is not None and not isinstance(delta, dict) and hasattr(delta, "model_dump"):
+        delta = delta.model_dump()
+    if not isinstance(delta, dict):
+        return
+    reasoning = (delta.get("reasoning_content") or delta.get("reasoning")
+                 or delta.get("thinking_blocks") or delta.get("reasoning_items"))
+    if reasoning:
+        timer.reasoning(now)
+    if delta.get("content"):
+        timer.answer(now)
 
 
 def _extract_reasoning_tokens(resp: Any) -> int:
@@ -428,6 +480,107 @@ def _int_or_none(v: Any) -> int | None:
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+def _observe_claude_stream_event(payload: dict[str, Any], timer: _ThinkingTimer, now: float) -> None:
+    """Read Claude Code's partial Anthropic stream events for thinking phases."""
+    if payload.get("type") != "stream_event":
+        return
+    event = payload.get("event") or {}
+    kind = event.get("type")
+    if kind == "content_block_start":
+        block_type = (event.get("content_block") or {}).get("type")
+        if block_type in ("thinking", "redacted_thinking"):
+            timer.reasoning(now)
+        elif block_type == "text":
+            timer.answer(now)
+    elif kind == "content_block_delta":
+        delta_type = (event.get("delta") or {}).get("type")
+        if delta_type in ("thinking_delta", "signature_delta"):
+            timer.reasoning(now)
+        elif delta_type == "text_delta":
+            timer.answer(now)
+
+
+def _run_claude_code_stream(cmd: list[str], prompt: str, *, timeout_s: int,
+                            cwd: str, env: dict[str, str]):
+    """Run stream-json with partial messages and timestamp events as they arrive.
+
+    Reader threads keep stdout/stderr draining while the main thread applies an
+    inactivity timeout, reset by each stdout event. The returned CompletedProcess
+    preserves the old gateway's error-handling shape; the separate dict is its
+    final `result` event.
+    """
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, cwd=cwd, env=env, bufsize=1,
+    )
+    events: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def reader(stream, name: str, dest: list[str]) -> None:
+        try:
+            for line in stream:
+                dest.append(line)
+                events.put((name, line))
+        finally:
+            events.put((name, None))
+
+    threads = [
+        threading.Thread(target=reader, args=(proc.stdout, "stdout", stdout_lines), daemon=True),
+        threading.Thread(target=reader, args=(proc.stderr, "stderr", stderr_lines), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    timer = _ThinkingTimer()
+    result: dict[str, Any] | None = None
+    deadline = time.time() + timeout_s
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        open_streams = 2
+        while open_streams:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout_s)
+            try:
+                name, line = events.get(timeout=remaining)
+            except queue.Empty:
+                raise subprocess.TimeoutExpired(cmd, timeout_s) from None
+            if line is None:
+                open_streams -= 1
+                continue
+            if name != "stdout":
+                continue
+            # A healthy long thinking phase must not hit a whole-call deadline:
+            # timeout_s is the maximum silence between stdout events, including
+            # the wait for the first one.
+            deadline = time.time() + timeout_s
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                _observe_claude_stream_event(payload, timer, time.monotonic())
+                if payload.get("type") == "result":
+                    result = payload
+        remaining = max(0.001, deadline - time.time())
+        returncode = proc.wait(timeout=remaining)
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        for thread in threads:
+            thread.join(timeout=1)
+
+    thinking_time = timer.finish(time.monotonic())
+    completed = subprocess.CompletedProcess(
+        cmd, returncode, "".join(stdout_lines), "".join(stderr_lines))
+    return result, thinking_time, completed
+
+
 def _call_claude_code(
     model_slug: str,
     prompt: str,
@@ -437,13 +590,21 @@ def _call_claude_code(
     effort: str | None,
     max_retries: int,
     backoff_base_s: float,
+    measure_thinking: bool = False,
 ) -> CallResult:
     """One model call through `claude -p` (prompt on stdin, lean flags, a fresh
-    empty working dir, credential env vars stripped). Never raises."""
+    empty working dir, credential env vars stripped). Never raises.
+
+    `measure_thinking` opts into stream-json/partial-message instrumentation;
+    the default JSON transport remains unchanged for existing evaluations.
+    """
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
              "cache_write_tokens": 0, "total_tokens": 0}
     cmd = ["claude", "-p", "--model", model_slug, *CLAUDE_CODE_FLAGS,
            "--system-prompt", SYSTEM_PROMPT]
+    if measure_thinking:
+        cmd[cmd.index("--output-format") + 1] = "stream-json"
+        cmd += ["--verbose", "--include-partial-messages"]
     if effort:
         cmd += ["--effort", effort]
     env = _claude_code_env(max_tokens)
@@ -452,11 +613,17 @@ def _call_claude_code(
     attempt = 0
     for attempt in range(1, max_retries + 1):
         retryable = False
+        thinking_time: float | None = None
         t0 = time.time()
         try:
             with tempfile.TemporaryDirectory(prefix="gate1-cc-") as cwd:
-                proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                      timeout=timeout_s, cwd=cwd, env=env)
+                if measure_thinking:
+                    out, thinking_time, proc = _run_claude_code_stream(
+                        cmd, prompt, timeout_s=timeout_s, cwd=cwd, env=env)
+                else:
+                    proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                          timeout=timeout_s, cwd=cwd, env=env)
+                    out = None
             latency = time.time() - t0
         except subprocess.TimeoutExpired:
             last_err, retryable = f"claude -p timed out after {timeout_s}s", True
@@ -467,7 +634,8 @@ def _call_claude_code(
             last_err = f"claude -p failed to start: {exc}"
         else:
             try:
-                out = json.loads(proc.stdout)
+                if not measure_thinking:
+                    out = json.loads(proc.stdout)
                 if not isinstance(out, dict):
                     raise ValueError("not a JSON object")
             except ValueError:
@@ -490,7 +658,8 @@ def _call_claude_code(
                         f"empty completion (finish_reason=length): the answer exceeded the "
                         f"output limit ({max_tokens} tokens) over {turns or '?'} requests",
                         provider="claude-code", cost_estimate_usd=estimate,
-                        reasoning_tokens=thinking, num_turns=turns, duration_api_ms=api_ms)
+                        reasoning_tokens=thinking, num_turns=turns, duration_api_ms=api_ms,
+                        thinking_time_s=thinking_time)
                 if out.get("is_error"):
                     status = out.get("api_error_status")
                     msg = f"claude -p error (api_error_status={status}): {result[:300]}"
@@ -527,7 +696,7 @@ def _call_claude_code(
                     return CallResult(usage, attempt, latency, text, finish_reason, err,
                                       provider="claude-code", cost_estimate_usd=estimate,
                                       reasoning_tokens=thinking, num_turns=turns,
-                                      duration_api_ms=api_ms)
+                                      duration_api_ms=api_ms, thinking_time_s=thinking_time)
         if not retryable or attempt >= max_retries:
             break
         time.sleep(min(backoff_base_s * (2 ** (attempt - 1)), 60.0))
@@ -550,6 +719,7 @@ def call_model(
     api: ApiRef | None = None,
     session: str | None = None,
     extra_params: dict[str, Any] | None = None,
+    measure_thinking: bool = False,
 ) -> CallResult:
     """Call one model and return a CallResult.
 
@@ -590,7 +760,7 @@ def call_model(
         return _call_claude_code(
             model_slug, prompt, max_tokens=max_tokens, timeout_s=timeout_s,
             effort=_claude_code_effort(reasoning), max_retries=max_retries,
-            backoff_base_s=backoff_base_s)
+            backoff_base_s=backoff_base_s, measure_thinking=measure_thinking)
 
     try:
         import litellm  # lazy import
@@ -662,6 +832,7 @@ def call_model(
 
     last_err: str | None = None
     for attempt in range(1, max_retries + 1):
+        thinking_time: float | None = None
         t0 = time.time()
         try:
             # max_retries=0 everywhere: litellm's underlying OpenAI client
@@ -686,17 +857,23 @@ def call_model(
                 # under 2 s). Streaming sidesteps that buffering path and makes
                 # timeout_s a between-chunks timeout: a healthy long call
                 # survives, a stalled one fails at timeout_s.
-                chunks = list(litellm.completion(
-                    model=model_str,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=timeout_s,
-                    max_retries=0,
-                    stream=True,
-                    stream_options={"include_usage": True},
-                    **call_kwargs,
-                ))
+                chunks = []
+                timer = _ThinkingTimer()
+                for chunk in litellm.completion(
+                        model=model_str,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout=timeout_s,
+                        max_retries=0,
+                        stream=True,
+                        stream_options={"include_usage": True},
+                        **call_kwargs):
+                    if measure_thinking:
+                        _observe_stream_chunk(chunk, timer, time.monotonic())
+                    chunks.append(chunk)
+                if measure_thinking:
+                    thinking_time = timer.finish(time.monotonic())
                 resp = litellm.stream_chunk_builder(chunks, messages=messages)
                 if resp is None:
                     return CallResult(usage, attempt, time.time() - t0, "", None,
@@ -744,6 +921,7 @@ def call_model(
                 provider=served_by or getattr(resp, "provider", None),
                 billed_cost_usd=_extract_billed_cost(resp),
                 reasoning_tokens=_extract_reasoning_tokens(resp),
+                thinking_time_s=thinking_time,
             )
 
         except Exception as exc:  # noqa: BLE001 - we intentionally catch all
@@ -791,6 +969,9 @@ def run_case(
     if api is not None and api.family == "claude-code":
         effort = _claude_code_effort(cfg.reasoning)
         reasoning_prefs = {"effort": effort} if effort else None
+    elif api is not None:
+        effort = (model.params or {}).get("reasoning_effort")
+        reasoning_prefs = {"effort": effort} if effort else None
     call = call_model(
         model.id,
         prompt,
@@ -805,6 +986,7 @@ def run_case(
         api=api,
         session=run_id,
         extra_params=model.params,
+        measure_thinking=cfg.thinking_time,
     )
     if call.stop_run:
         raise UsageLimitReached(call.stop_run)
@@ -821,6 +1003,8 @@ def run_case(
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens_for(model.id),
         latency_s=round(latency, 4),
+        thinking_time_s=(round(call.thinking_time_s, 4)
+                         if call.thinking_time_s is not None else None),
         attempts=attempts,
         prompt=prompt,
         output_text=text,

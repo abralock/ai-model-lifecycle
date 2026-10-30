@@ -114,8 +114,8 @@ MLFLOW_TRACKING_URI=<server URI> python mlflow_export.py --all-pairs
 |---|---|
 | Experiment `Gate1 / <pair>` | One model pair (sanity suite); `Gate1 / <pair> · real` for the real suite |
 | Run `<run id> (<source>)` | One harness run. Metrics: `overall_score`, `fisher_p`, and **`current_*` / `target_*` pairs** for every model metric below (e.g. `current_cost_component` vs `target_cost_component`). Tags: `verdict`, `providers`, `cost_source`, `repeats`. Artifacts: **`comparison.png`** (current in blue vs target in orange: pass rate overall and per task, time, cost, cost per passed task, output tokens), `REPORT.md` and `calls.json` (one row per call). |
-| ↳ Model run `<model> (current/target)` | One model in that run, coloured **blue (current) / orange (target)**. Metrics with the **same names for both models**: `pass_rate`, `passes`, `cost_usd`, `cost_per_task_usd`, `cost_per_passed_task_usd`, `mean_latency_s`, `output_tokens`, `pass_rate_r1` / `r3` / `r4` / `r5` per task, and the score components `quality_component`, `cost_component`, `time_component`, `overall_score` (current = 100). |
-| ↳↳ Call run `<model> · <task> · rep N` | One model call: `passed`, `latency_s`, tokens, `cost_usd`; tags `result` (PASS/FAIL/INFRA) and `failure_reason`; artifact `output.txt` (the model's full answer). |
+| ↳ Model run `<model> (current/target)` | One model in that run, coloured **blue (current) / orange (target)**. Metrics with the **same names for both models**: `pass_rate`, `passes`, `cost_usd`, `cost_per_task_usd`, `cost_per_passed_task_usd`, `mean_latency_s`, `output_tokens`, `reasoning_tokens`, `pass_rate_r1` / `r3` / `r4` / `r5` per task, and the score components `quality_component`, `cost_component`, `time_component`, `overall_score` (current = 100). New instrumented runs also have `mean_thinking_time_s` and `thinking_time_runs`; param `reasoning_effort` records the level. |
+| ↳↳ Call run `<model> · <task> · rep N` | One model call: `passed`, `latency_s`, tokens, `reasoning_tokens`, `cost_usd`, and `thinking_time_s` when measured; params include `reasoning_effort`; tags `result` (PASS/FAIL/INFRA) and `failure_reason`; artifact `output.txt` (the model's full answer). |
 
 ### See current vs target in charts (no setup)
 
@@ -129,6 +129,18 @@ model and an orange bar for the target**. Untick runs in the list to keep only
 the run you care about, or leave them all to see how results moved between runs.
 
 A ready-made picture of one run: open the run → **Artifacts** → `comparison.png`.
+
+### Thinking time by reasoning effort
+
+For runs made with `thinking_time: true` under `defaults:` in `models.yaml`, search
+`tags.level = 'call'` and chart `thinking_time_s`. Filter or group by
+`params.reasoning_effort` (`low`, `medium`, `high`, or `not recorded`) to compare
+levels. Model runs expose `mean_thinking_time_s` over only the calls with a timing
+measurement; `thinking_time_runs` shows that coverage.
+
+Thinking time is client-observed reasoning-stream time, not provider-reported compute
+time. Existing result files have no stream timestamps and cannot be backfilled. See
+`docs/LATENCY.md` for the measurement definition and the Claude Code/OpenCode routes.
 
 ### On a run's Model metrics tab
 

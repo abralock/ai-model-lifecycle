@@ -215,7 +215,10 @@ def model_metrics(a, components: dict[str, float] | None) -> dict[str, float]:
     m = {"pass_rate": a.pass_rate, "passes": a.passes, "scored_runs": a.runs,
          "cost_usd": a.cost_usd, "cost_per_task_usd": a.mean_cost,
          "mean_latency_s": a.mean_latency, "output_tokens": a.output_tokens,
-         "infra_errors": a.infra_errors}
+         "reasoning_tokens": a.reasoning_tokens, "infra_errors": a.infra_errors}
+    if a.thinking_time_runs:
+        m["mean_thinking_time_s"] = a.mean_thinking_time
+        m["thinking_time_runs"] = a.thinking_time_runs
     if a.passes:
         m["cost_per_passed_task_usd"] = a.cost_per_success
     for case, (k, n) in a.case_results.items():
@@ -289,8 +292,9 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
         mlflow.log_figure(fig, "comparison.png")
         _plt().close(fig)
 
-        table: dict[str, list] = {k: [] for k in ("model", "role", "case", "rep", "result", "reason",
-                                                  "latency_s", "output_tokens", "cost_usd", "provider")}
+        table: dict[str, list] = {k: [] for k in (
+            "model", "role", "case", "rep", "result", "reason", "reasoning_effort",
+            "latency_s", "thinking_time_s", "output_tokens", "reasoning_tokens", "cost_usd", "provider")}
         # one run per model with the SAME metric names, so every MLflow chart
         # shows the two models (and earlier runs) side by side; mlflow.runColor
         # makes MLflow draw current in blue and target in orange
@@ -298,7 +302,9 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
                                       ("target", pair.target, tgt, TARGET_COLOR)):
             with mlflow.start_run(run_name=f"{model.name} ({role})", nested=True):
                 mlflow.set_tags({**common_tags, "level": "model", "role": role, "mlflow.runColor": color})
-                mlflow.log_params({"model": model.name, "model_id": model.id, "role": role})
+                levels = sorted({report.reasoning_level(r) for r in runs if r["role"] == role})
+                mlflow.log_params({"model": model.name, "model_id": model.id, "role": role,
+                                   "reasoning_effort": levels[0] if len(levels) == 1 else "mixed"})
                 mlflow.log_metrics(model_metrics(a, comps[role]))
 
                 for rec in sorted((r for r in runs if r["role"] == role), key=lambda r: (r["case_id"], _rep(r))):
@@ -311,10 +317,14 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
                     case = rec["case_id"].split("_")[0].upper()
                     with mlflow.start_run(run_name=f"{_short(rec['model_slug'])} · {case} · rep {rep}", nested=True):
                         mlflow.log_params({"model": rec["model_name"], "role": rec["role"], "case": rec["case_id"],
-                                           "rep": rep, "provider": provider})
+                                           "rep": rep, "provider": provider,
+                                           "reasoning_effort": report.reasoning_level(rec)})
                         call_metrics = {"latency_s": rec.get("latency_s", 0),
                                         "input_tokens": rec.get("input_tokens", 0),
-                                        "output_tokens": rec.get("output_tokens", 0), "cost_usd": cost}
+                                        "output_tokens": rec.get("output_tokens", 0),
+                                        "reasoning_tokens": rec.get("reasoning_tokens", 0), "cost_usd": cost}
+                        if isinstance(rec.get("thinking_time_s"), (int, float)):
+                            call_metrics["thinking_time_s"] = rec["thinking_time_s"]
                         if not infra:
                             call_metrics["passed"] = int(sr.passed)
                         mlflow.log_metrics(call_metrics)
@@ -323,8 +333,11 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
                         mlflow.log_text(rec.get("output_text") or "", "output.txt")
                     for k, v in (("model", rec["model_name"]), ("role", rec["role"]), ("case", rec["case_id"]),
                                  ("rep", rep), ("result", result), ("reason", "" if sr.passed else sr.reason),
+                                 ("reasoning_effort", report.reasoning_level(rec)),
                                  ("latency_s", rec.get("latency_s", 0)),
+                                 ("thinking_time_s", rec.get("thinking_time_s")),
                                  ("output_tokens", rec.get("output_tokens", 0)),
+                                 ("reasoning_tokens", rec.get("reasoning_tokens", 0)),
                                  ("cost_usd", cost), ("provider", provider)):
                         table[k].append(v)
         mlflow.log_table(table, "calls.json")

@@ -185,6 +185,33 @@ def test_go_chat_call_streams_and_reassembles(tmp_path, monkeypatch, fake_litell
     assert res.ok and res.output_tokens == 50
 
 
+def test_go_stream_records_thinking_time_and_effort(tmp_path, monkeypatch, fake_litellm):
+    def chunk(*, reasoning="", content=""):
+        delta = types.SimpleNamespace(
+            reasoning_content=reasoning or None, content=content or None,
+            thinking_blocks=None, reasoning_items=None,
+            model_dump=lambda: {"reasoning_content": reasoning or None, "content": content or None})
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=delta)])
+
+    fake_litellm.chunks = [
+        chunk(reasoning="plan"), chunk(reasoning=" more"),
+        chunk(content="answer"), types.SimpleNamespace(choices=[]),
+    ]
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    times = iter((1.0, 3.0, 7.0, 8.0, 9.0))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(times))
+    cfg = _cfg(tmp_path, GO_YAML + "\ndefaults:\n  thinking_time: true\n")
+    pair = cfg.get_pair("g")
+    res = runner.run_case(cfg, "g", "r3_oracle_to_postgres", pair.target, "target",
+                          run_id="20261030T000000Z")
+
+    assert res.ok and res.thinking_time_s == pytest.approx(6.0)
+    assert res.reasoning_requested == {"effort": "low"}
+    saved = json.loads(next(tmp_path.rglob("*.json")).read_text())
+    assert saved["thinking_time_s"] == pytest.approx(6.0)
+    assert saved["reasoning_requested"] == {"effort": "low"}
+
+
 def test_go_call_sends_no_client_retries(tmp_path, monkeypatch, fake_litellm):
     """litellm's underlying OpenAI client retries timeouts twice by default
     (3 hidden attempts per call, measured 2026-10-26: a 45 s timeout raised

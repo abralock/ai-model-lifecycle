@@ -1,7 +1,7 @@
 # Gate 1 Metrics Improvement Plan
 
-> Status: Approved for implementation  
-> Date: 2026-10-30
+> Status: Implemented (single-shot, 2026-10-30); extended to agentic runs (§8, 2026-10-31)  
+> Date: 2026-10-30, amended 2026-10-31
 
 ## Purpose
 
@@ -12,6 +12,8 @@ Add three complementary measurements to the Gate 1 model-evaluation scorecard:
 3. Execution Time / Thinking Time ratio
 
 The implementation must preserve Gate 1's existing single-shot benchmark, deterministic scoring, cost accounting, and weighted overall score.
+
+**Amendment 2026-10-31.** Gate 1 now measures migration the way it is done on a real project: the model changes code, builds, tests and fixes until the project delivers (`agentic.py`, docs/AGENTIC.md). Agentic results are the primary leaderboard; single-shot is kept as a quick screening test. Sections 1–7 below define the metrics for single-shot runs and still apply to them unchanged. Section 8 defines the same three metrics for agentic attempts.
 
 **Scope exclusion:** OpenRouter is excluded for now. Do not make OpenRouter calls or change its transport, billing, instrumentation, or route-specific behavior as part of this work. The initial implementation and smoke testing target supported non-OpenRouter routes only.
 
@@ -43,7 +45,7 @@ Rules:
 - Failed attempts do not contribute to the TTFS average.
 - Show coverage as passes / scored runs.
 - Render `n/a` when a model has no passes.
-- Do not introduce a retry-until-pass or generate-test-fix loop.
+- Do not introduce a retry-until-pass or generate-test-fix loop *into single-shot runs*. (Agentic runs are that loop by design, measured separately: §8.)
 
 TTFS does not add a separate timeout. The existing call `timeout_s` still prevents an attempt from running indefinitely, and the existing transport-retry policy still applies. If all transport attempts time out or fail, the record remains an infrastructure error: it has no TTFS and is excluded from Pass@T. A `Pass@T` budget is only a reporting threshold; it does not cancel a call at `T`.
 
@@ -268,3 +270,79 @@ Acceptance criteria:
 - Execution / Thinking ratio is `n/a` without valid paired measurements and nonzero thinking time.
 - Historical reports remain reproducible.
 - New Markdown and MLflow outputs use the same metric definitions and values.
+
+## 8. Agentic attempts (amendment 2026-10-31)
+
+An agentic attempt (`agentic.py`) is one Claude Code session in a sandbox that
+works on the project until its `/goal` is met or the time limit stops it; what
+it delivered is then scored by the same deterministic scorer, hidden tests
+included. One attempt is one opportunity to succeed, so the single-shot
+definitions carry over with these changes.
+
+For agentic attempt `i`:
+
+- `W_i = latency_s`: the session's wall-clock time, sandbox start to stop.
+  Scoring time stays outside it.
+- `P_i`: the scorer's verdict on what the attempt delivered (live scoring
+  through the score cache, so a scorer fix reaches earlier attempts).
+- A session that never ran, or that Claude Code ended with an error (login,
+  usage limit, API), is an infrastructure error and is excluded from every
+  metric. A session stopped by the time limit is a scored attempt.
+
+### 8.1 TTFS
+
+```text
+Mean TTFS = sum(W_i for passing attempts) / number of passes
+```
+
+`n/a` without a pass; shown with coverage as passes / attempts.
+
+### 8.2 Pass@T
+
+```text
+Pass@T = number of attempts where P_i and W_i <= T
+         ------------------------------------------
+                 number of scored attempts
+```
+
+Inclusive boundary; failures and slow passes stay in the denominator. Agentic
+attempts build and test for minutes, so they have their own budgets,
+configurable in `models.yaml` as `agentic_time_budgets_s`:
+
+| Suite | Agentic budgets |
+|---|---|
+| Sanity | 120, 300, 600 seconds |
+| Real | 900, 1800, 3600 seconds |
+
+A budget is a reporting threshold; the attempt's hard stop is `--time-limit`.
+
+### 8.3 Tool time / model time ratio
+
+In an agentic session most of the time goes to running builds and tests rather
+than to producing text, so the stream-phase execution / thinking ratio of §1.3
+is replaced by:
+
+- **Model time:** `duration_api_ms`, the session's time in API requests
+  (thinking and writing), as Claude Code reports it.
+- **Tool time:** for each tool call, from the `tool_use` message to its
+  `tool_result`, by the events' own timestamps in the session stream, with
+  overlapping (parallel) calls merged so no second counts twice.
+
+```text
+Tool / model time = sum(tool_time_s) / sum(model_time_s)
+```
+
+over attempts that measured both. Never derived from `latency_s` (which also
+holds sandbox start-up and harness overhead); `n/a` when unmeasured or model
+time is zero; a missing measurement is never zero. Above 1 means the attempt
+spent more time waiting on builds and tests than on the model. The model's
+reported thinking time (`thinking_duration_ms`) is recorded per attempt as
+`thinking_time_s` for reference.
+
+### 8.4 Where they appear
+
+`runs/LEADERBOARD.md`, agentic section, per task: Passed, Pass rate, Mean time,
+TTFS, one Pass@T column per budget, Tool / model time, Mean cost, Cost / pass,
+Mean turns. Like §1.4, these are descriptive and do not change any score.
+Records written before §8 were backfilled from their saved session streams.
+

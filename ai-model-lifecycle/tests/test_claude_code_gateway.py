@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import threading
 from typing import Any
 
 import pytest
@@ -390,7 +391,11 @@ def test_effort_flag_when_set(claude):
 
 def test_real_suite_effort_maps_to_flag():
     assert runner._claude_code_effort(load_config(suite="real").reasoning) == "medium"
+    # the sanity suite sets no `reasoning`; Claude Code takes defaults.effort
     assert runner._claude_code_effort(load_config().reasoning) is None
+    sanity = load_config()
+    cc = sanity.get_pair(PAIR).target
+    assert runner.call_prefs(sanity, PAIR, cc)[1] == {"effort": "medium"}
     assert runner._claude_code_effort({"max_tokens": 16000}) is None
 
 
@@ -421,9 +426,22 @@ def test_run_case_sends_and_records_suite_effort(claude, tmp_path):
     assert cur.reasoning_requested == tgt.reasoning_requested == {"effort": "high"}
 
 
-def test_run_case_without_effort_records_none(claude):
+def test_sanity_suite_sends_a_named_effort_like_the_real_suite(claude):
+    """Without --effort Claude Code picks its own level and never says which
+    (2026-10-31), so the sanity suite names one: every result has a level."""
     claude.replies = [_success()]
     cfg = load_config()
+    pair = cfg.get_pair(PAIR)
+    res = runner.run_case(cfg, PAIR, CASE, pair.target, "target", run_id="20261016T000000Z")
+    cmd = claude.model_calls[0]["cmd"]
+    assert cmd[cmd.index("--effort") + 1] == "medium"
+    assert res.reasoning_requested == {"effort": "medium"}
+
+
+def test_without_a_configured_effort_none_is_sent(claude, tmp_path):
+    claude.replies = [_success()]
+    cfg = load_config()
+    cfg.defaults.pop("effort", None)
     pair = cfg.get_pair(PAIR)
     res = runner.run_case(cfg, PAIR, CASE, pair.target, "target", run_id="20261016T000000Z")
     assert "--effort" not in claude.model_calls[0]["cmd"]
@@ -641,3 +659,124 @@ def test_default_json_transport_does_not_invent_thinking_time(claude):
     claude.replies = [_success()]
     res = _call()
     assert res.error is None and res.thinking_time_s is None
+
+
+class _BlockingStdin(_StreamStdin):
+    """Simulates the OS pipe buffer filling up: write() blocks until released."""
+
+    def __init__(self):
+        super().__init__()
+        self.release = threading.Event()
+
+    def write(self, text):
+        self.release.wait(timeout=30)
+        super().write(text)
+
+
+class _BlockingStdout:
+    """A stdout that never produces a line (CLI stalled before any output)."""
+
+    def __init__(self):
+        self.release = threading.Event()
+
+    def __iter__(self):
+        self.release.wait(timeout=30)
+        return iter(())
+
+
+def test_stream_stdin_write_cannot_hang_the_inactivity_timeout(claude, monkeypatch):
+    """The prompt can exceed the OS pipe buffer; if the CLI stalls before
+    draining stdin, the write must not block the timeout loop (the non-stream
+    path feeds stdin under subprocess.run's timeout)."""
+    process = _FakeStreamProcess([])
+    process.stdin = _BlockingStdin()
+    process.stdout = _BlockingStdout()
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda cmd, **kw: process)
+
+    box = {}
+
+    def run():
+        box["res"] = runner._call_claude_code(
+            "claude-haiku-5-5", "P" * 100, max_tokens=32000, timeout_s=1,
+            effort=None, max_retries=1, backoff_base_s=0.0, measure_thinking=True)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout=10)
+    process.stdin.release.set()
+    process.stdout.release.set()
+    assert not t.is_alive(), "call hung: stdin write blocked the timeout loop"
+    res = box["res"]
+    # the inactivity semantics must be stated, not a whole-call deadline
+    assert "no output for 1s" in (res.error or "")
+
+
+def test_stream_broken_pipe_reads_cli_error_and_retries(claude, monkeypatch):
+    """A CLI that exits before consuming stdin (e.g. 529 overloaded at startup)
+    must have its JSON error parsed and retried, as the non-stream
+    communicate() path does — not be misreported as 'failed to start'."""
+
+    class _BrokenStdin(_StreamStdin):
+        def write(self, text):
+            raise BrokenPipeError("broken pipe")
+
+        def close(self):
+            raise BrokenPipeError("broken pipe")
+
+    first = _FakeStreamProcess([_error("overloaded", 529)])
+    first.stdin = _BrokenStdin()
+    second = _FakeStreamProcess([
+        {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": ANSWER}}},
+        _success(),
+    ])
+    procs = iter([first, second])
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda cmd, **kw: next(procs))
+    res = _call(measure_thinking=True, max_retries=2)
+    assert res.error is None and res.text == ANSWER
+    assert res.attempts == 2
+
+
+def test_stream_thinking_time_excludes_process_shutdown(claude, monkeypatch):
+    """A thinking-only response closes its reasoning phase at end-of-stream,
+    not after proc.wait() — shutdown time is not model thinking time."""
+    clock = {"t": 1.0}
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock["t"])
+    events = [
+        {"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "thinking", "thinking": ""}}},
+        _success(result="", stop_reason="max_tokens"),
+    ]
+    process = _FakeStreamProcess(events)
+    process.wait = lambda timeout=None: clock.__setitem__("t", clock["t"] + 500) or 0
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda cmd, **kw: process)
+    res = _call(measure_thinking=True)
+    assert res.thinking_time_s is not None and res.thinking_time_s < 500
+
+
+def test_stream_error_tail_is_bounded_and_from_the_end(claude, monkeypatch):
+    """Only an error tail is ever read from raw stream stdout; the full
+    partial-message stream (MB of JSONL on long answers) must not be kept."""
+    lines = [f"garbage-{i}" for i in range(500)]
+    process = _FakeStreamProcess([])
+    process.stdout = io.StringIO("".join(line + "\n" for line in lines))
+    process.wait = lambda timeout=None: 1
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda cmd, **kw: process)
+    result, timing, completed, lookups = runner._run_claude_code_stream(
+        ["claude", "-p"], "prompt", timeout_s=5, cwd=".", env={})
+    assert result is None and lookups == []
+    assert "garbage-499" in completed.stdout          # the tail survives
+    assert "garbage-0\n" not in completed.stdout      # the bulk does not
+    assert len(completed.stdout) < 10_000
+
+
+@pytest.mark.parametrize("message", [
+    "You've hit your 5-hour limit · resets 11am (Asia/Taipei)",     # seen live 2026-10-31
+    "You've hit your weekly limit · resets Mon 9am",
+])
+def test_every_subscription_limit_wording_stops_the_run(claude, message):
+    """Unrecognized, the 5-hour limit was recorded as an infra error on every
+    remaining call instead of stopping the run (2026-10-31)."""
+    claude.replies = [_error(message, 429), _success()]
+    res = _call(max_retries=5)
+    assert res.stop_run and len(claude.model_calls) == 1

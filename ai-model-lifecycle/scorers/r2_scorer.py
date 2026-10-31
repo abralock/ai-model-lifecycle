@@ -151,7 +151,10 @@ def parity_counts(report: Path) -> tuple[int, int]:
     return int(stats.get("expected", 0)), int(stats.get("unexpected", 0)) + int(stats.get("flaky", 0))
 
 
-def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None) -> ScoreResult:
+def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None,
+          base: Path | None = None) -> ScoreResult:
+    """Score an answer applied onto `base` (default: the pristine workspace);
+    see r1b_scorer.score."""
     res = ScoreResult(case_id=CASE_ID, model_slug=model_slug)
     if not parse_files(output_text) and not parse_edits(output_text):
         res.reason = "no `### FILE:` or `### EDIT:` blocks found in model output"
@@ -160,7 +163,7 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
     ws = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="r2_"))
     ws.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(WORKSPACE, ws, dirs_exist_ok=True)
+        shutil.copytree(base or WORKSPACE, ws, dirs_exist_ok=True)
         applied = apply_output(output_text, ws, strip_prefix="workspace/")
         for rel in FIXED_FILES:                     # the toolchain is fixed: restore it
             shutil.copy(WORKSPACE / rel, ws / rel)

@@ -42,7 +42,23 @@ There is no `pyproject.toml`, so `uv sync` does not apply; install from
 
 ## Harness (Gate 1)
 
+Two ways a model is tested; see [docs/AGENTIC.md](docs/AGENTIC.md):
+
+* **Agentic migration (primary)** — `agentic.py`: the model works on the project
+  the way a developer would (change code, build, test, fix) in a Docker sandbox
+  until its goal is met, then the same acceptance check scores what it delivered.
+* **Single-shot screening** — `runner.py`: one reply, nothing built or tested.
+  Quick and cheap, and the only test every route can take, but not a migration.
+
 ```bash
+# agentic migration: one-time setup, then a pair's Claude Code model on every task
+docker build -t gate1-agent:latest docker/agent
+claude setup-token        # then add CLAUDE_CODE_OAUTH_TOKEN=... to .env
+python agentic.py --pair sonnet-5.5-cc-vs-deepseek-v4-pro --role current
+python agentic.py --pair sonnet-5.5-cc-vs-deepseek-v4-pro --role current \
+    --case r1b_jhipster_boot3 --repeats 3 --time-limit 3600   # -> runs/<pair>/agentic/<run>/REPORT.md
+python leaderboard.py     # agentic ranking first, single-shot screening after it
+
 # run the frozen cases against one pair (writes runs/<pair>/<model>.<case>.json)
 python runner.py --pair opus-4.8-vs-5.5
 python runner.py --pair opus-4.8-vs-5.5 --case r3_oracle_to_postgres
@@ -56,6 +72,19 @@ python report.py --pair opus-4.8-vs-5.5           # live scorers
 python report.py --pair opus-4.8-vs-5.5 --no-score # fast, uses runner ok-flag
 python report.py --pair opus-4.8-vs-5.5 --list-runs              # run ids, complete/partial
 python report.py --pair opus-4.8-vs-5.5 --run 20261009T143005Z   # score a past run
+# Pass@T budgets: suite defaults (models.yaml time_budgets_s) or per report:
+python report.py --pair opus-4.8-vs-5.5 --time-budget 30 --time-budget 60 --time-budget 120
+# thinking-effort sweep (docs/LATENCY.md): one run id per level, then one table
+python runner.py --pair opus-5.5-cc-vs-kimi-k3 --role current --effort low,medium,high,xhigh,max --repeats 3
+python report.py --pair opus-5.5-cc-vs-kimi-k3 --by-effort        # -> REPORT.effort.md
+# CI-style repair rounds (separate from the score): show a failed answer's model what
+# CI reported and let it fix up its answer, up to N rounds -> runs/<pair>/repair/<run>/REPORT.md
+python repair.py --pair opus-5.5-cc-vs-kimi-k3 --suite real --run <run id> --rounds 3
+# docs-assisted run (separate from the score): Claude Code models may look up current
+# library docs through Context7's MCP server; every lookup is recorded. Optional
+# CONTEXT7_API_KEY in .env raises Context7's rate limits.
+python runner.py --pair opus-5.5-cc-vs-kimi-k3 --suite real --role current --docs context7
+python report.py --pair opus-5.5-cc-vs-kimi-k3 --suite real --run <run id>
 
 # individual scorers
 python -m scorers.r1_scorer --output-file <model-output.txt>

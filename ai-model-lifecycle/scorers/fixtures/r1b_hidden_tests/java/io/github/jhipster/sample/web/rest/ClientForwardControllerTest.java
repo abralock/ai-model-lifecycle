@@ -5,8 +5,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.Properties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -24,7 +27,22 @@ class ClientForwardControllerTest {
     @BeforeEach
     public void setup() {
         ClientForwardController clientForwardController = new ClientForwardController();
-        this.restMockMvc = MockMvcBuilders.standaloneSetup(clientForwardController, new TestController()).build();
+        var builder = MockMvcBuilders.standaloneSetup(clientForwardController, new TestController());
+        // A standalone MockMvc does not read application.yml. Match the app's own
+        // spring.mvc.pathmatch.matching-strategy, so the test checks the forwarding
+        // behavior, not which of Boot 3's two supported matchers the migration kept.
+        if (usesAntPathMatcher()) {
+            builder.setPatternParser(null);
+        }
+        this.restMockMvc = builder.build();
+    }
+
+    private static boolean usesAntPathMatcher() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new FileSystemResource("src/main/resources/config/application.yml"));
+        Properties props = yaml.getObject();
+        String strategy = props == null ? null : props.getProperty("spring.mvc.pathmatch.matching-strategy");
+        return strategy != null && strategy.trim().toLowerCase().replace('-', '_').equals("ant_path_matcher");
     }
 
     @Test

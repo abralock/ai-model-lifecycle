@@ -93,6 +93,36 @@ def test_the_answer_holds_changed_new_and_deleted_deliverables_only(tmp_path):
     assert parse_deletes(answer) == ["src/main/java/Gone.java"]
 
 
+def test_r2_collects_assets_beside_src_app():
+    spec = agentic.CASES["r2_gwt_to_angular"]
+    for rel in ("src/app/app.component.ts", "src/styles.css", "src/images/ic_add.png"):
+        assert agentic._match(rel, spec.deliverables)
+    assert not agentic._match("e2e/java/RunCucumberTest.java", spec.deliverables)
+    assert not agentic._match("node_modules/x/index.js", spec.deliverables)
+
+
+def test_binary_deliverables_reach_the_scorer_intact(tmp_path):
+    """Live 2026-10-31: Opus copied the GWT app's PNGs into src/app/assets and
+    its CSS used them; dropping binaries failed a build that passed in the
+    sandbox. They now travel base64-encoded and apply_output writes them."""
+    from scorers.base import apply_output
+    png = bytes(range(256)) * 40                                  # not valid UTF-8
+    answer = agentic.answer_from({}, {"src/app/assets/logo.png": png,
+                                      "src/app/app.component.ts": b"export class A {}\n"})
+    assert parse_files(answer) == {"src/app/app.component.ts": "export class A {}\n"}
+    applied = apply_output(answer, tmp_path)
+    assert (tmp_path / "src/app/assets/logo.png").read_bytes() == png
+    assert sorted(applied.written) == ["src/app/app.component.ts", "src/app/assets/logo.png"]
+
+
+def test_a_binary_block_cannot_write_outside_the_project(tmp_path):
+    from scorers.base import apply_output
+    answer = "### BINARY: ../escape.png\n```base64\naGk=\n```\n"
+    (tmp_path / "proj").mkdir()
+    apply_output(answer, tmp_path / "proj")
+    assert not (tmp_path / "escape.png").exists()
+
+
 def test_files_come_in_the_order_they_are_applied():
     """r3's scorer runs the files in answer order: schema before procedures."""
     order = agentic.CASES["r3_oracle_to_postgres"].deliverables

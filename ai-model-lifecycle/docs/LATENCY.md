@@ -132,3 +132,67 @@ API alone) and `num_turns` (how many requests Claude Code made for the answer).
 Comparing `duration_api_ms` with `latency_s` will separate model time from CLI
 overhead and internal retries, and make outliers like the doubled requests easy to
 spot.
+
+## Descriptive timing metrics (docs/METRICS_PLAN.md)
+
+Three scorecard rows describe timing without touching the weighted overall score,
+the Quality/Cost/Time components, or the verdict:
+
+- **TTFS (mean successful-attempt latency, s)** — Gate 1 is single-shot, so each
+  attempt has one opportunity to succeed and `TTFS_i = latency_s` of a passing
+  attempt. The row shows the mean over passing attempts with coverage
+  `(passes/scored runs)`, and `n/a` without a pass. There is no retry-until-pass
+  loop and no extra timeout.
+- **Pass@T** — the share of *scored* attempts that passed with `latency_s <= T`
+  (inclusive boundary). Failures and slow passes stay in the denominator; infra
+  errors are excluded from both sides. Budgets are reporting thresholds only —
+  they never cancel a call. Defaults come from `time_budgets_s` in `models.yaml`
+  (sanity: 30/60/120 s, real suite: 300/900/1800 s) and can be overridden per
+  report with repeatable `--time-budget` flags.
+- **Execution / thinking time ratio** — `sum(execution_time_s) / sum(thinking_time_s)`
+  over the calls where *both* stream phases were measured, with coverage
+  `(measured/scored runs)`. Execution time is the streamed visible-answer phase,
+  measured directly — never `latency_s - thinking_time_s`, which also contains
+  startup, network and CLI overhead. `n/a` without paired measurements or with
+  zero total thinking; a missing measurement is never treated as zero, and phase
+  durations are never inferred from reasoning-token counts.
+
+Historical run files already contain latency and pass/fail, so regenerating a
+report adds TTFS and Pass@T to old runs without new model calls; their phase
+ratio stays `n/a` unless the run was made with `thinking_time: true`. Under
+`--no-score`, TTFS and Pass@T reflect the runner completion flag, not verified
+task correctness, and the report says so.
+
+## Thinking-effort sweeps (low / medium / high / xhigh / max)
+
+Run one pair at several thinking-effort levels and compare them side by side:
+
+```bash
+# models.yaml defaults: thinking_time: true   (to measure thinking/answer phases)
+python runner.py --pair opus-5.5-cc-vs-kimi-k3 --role current --effort low,medium,high,xhigh,max --repeats 3
+python report.py --pair opus-5.5-cc-vs-kimi-k3 --by-effort      # -> REPORT.effort.md
+```
+
+- `--effort` runs the pair once per level, **each level in its own run id**, and
+  records `effort_override` on every call. Claude Code receives `--effort <level>`
+  and takes all five levels (`claude --help`, CLI 2.1.314). OpenCode Go's chat route
+  receives `reasoning_effort: <level>` (replacing the model's own `params` for that
+  run only — `models.yaml` is not changed) and takes low / medium / high only: its
+  OpenAI-style `reasoning_effort` stops at `high`, so `xhigh` and `max` are refused
+  there rather than sent.
+- OpenRouter pairs are refused (out of scope, docs/METRICS_PLAN.md), and so are Go's
+  responses and messages routes, which have no verified effort control — a sweep
+  whose levels silently do nothing would be worse than no sweep. Whether a Go model
+  honors `reasoning_effort` shows in its thinking tokens per level.
+- `--role current|target` runs one side only (useful when one gateway is out of
+  quota). One-sided runs are partial, so they never become the main scorecard.
+- Effort runs never become `REPORT.md` either: the scorecard skips them, and
+  `--list-runs` labels them `effort sweep: <level> (<roles>)`.
+- `report.py --by-effort` writes `REPORT.effort.md` (or `REPORT.<suite>.effort.md`):
+  one row per model × level, from the latest run of each, plus the main scorecard's
+  run as a **default** baseline — pass rate, mean latency, thinking and answer time,
+  their ratio, thinking tokens per call, TTFS, Pass@T and cost per run — then
+  thinking time by task. Descriptive only: it feeds no score or verdict.
+- Inside an instrumented stream, a phase that never happened is a measured **0 s**
+  (a model that answers without thinking, common at low effort, thought for 0 s);
+  `n/a` means the call was not instrumented at all.

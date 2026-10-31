@@ -1,0 +1,41 @@
+{
+  "pair_id": "opus-5.5-cc-vs-kimi-k3",
+  "case_id": "r3_oracle_to_postgres",
+  "model_slug": "claude-opus-5-5",
+  "model_name": "Claude Opus 5.5 (CC)",
+  "role": "current",
+  "rep": 0,
+  "run_id": "20261031T123749Z",
+  "mode": "agentic",
+  "effort_override": "medium",
+  "reasoning_requested": {
+    "effort": "medium"
+  },
+  "time_limit_s": 1200,
+  "goal": "postgres/schema.sql and postgres/procedures.sql exist; applied in that order to an empty database and loaded with seed.sql, sp_customer_tier() returns exactly the rows in expected/output.csv and sp_monthly_report('2026-09') exactly the rows in expected/output_monthly.csv; and neither file uses DUAL, NVL(, ROWNUM, (+), VARCHAR2 or sysdate.",
+  "provider": "claude-code",
+  "ok": true,
+  "error": null,
+  "timed_out": false,
+  "latency_s": 59.63,
+  "num_turns": 4,
+  "tool_calls": 3,
+  "duration_api_ms": 55641,
+  "input_tokens": 8,
+  "output_tokens": 5901,
+  "cache_read_tokens": 65519,
+  "cache_write_tokens": 14958,
+  "cost_estimate_usd": 0.25285692000000004,
+  "final_message": "I converted both procedures to PostgreSQL in `postgres/schema.sql` and `postgres/procedures.sql`, and their output matches the expected results exactly. I applied the schema, procedures and `seed.sql` to a fresh database, called the two procedures, and compared the tables with both expected CSV files. They matched with the calls wrapped in a transaction and with autocommit on. Running `sp_monthly_report('2026-09')` twice still leaves the same three rows. A search of both files finds none of `DUAL`, `NVL(`, `ROWNUM`, `(+)`, `VARCHAR2`, `sysdate`, `%ROWTYPE` or `%TYPE`, including in comments.\n\nChanges from the Oracle code:\n- **Transactions:** the procedures run inside whatever transaction calls them, so I removed Oracle's `COMMIT` and `ROLLBACK`. Postgres won't allow `COMMIT` in a procedure that has an exception handler, or when it's called inside an open transaction.\n- **Monthly report errors:** the \"no data\" error is now a raised error with its own code, which the handler catches and ignores, as Oracle did. Anything else is rolled back and passed on to the caller.\n- **Replacements:** `NVL` is now `COALESCE`, `sysdate` is `now()`, the `ROWNUM = 1` lookup is `LIMIT 1`, and the `DUAL` count is just set to 1, since that query always returned 1.\n- **Row order:** both loops now sort their rows (tiers by total spend, lowest first; the monthly report by revenue, highest first). The expected files list rows in those orders, so the stored rows come out in that order. Oracle gave no ordering here.\n- **Types:** ID columns are `bigint`, money columns keep their `numeric(12,2)` or `numeric(10,2)` precision, and dates are `timestamptz`. The sequence is kept too.\n\nThings you might trip over:\n- **Not functions:** these are procedures as the task asked, so you run them with `CALL` and then read `customer_tiers` and `monthly_report`. `SELECT * FROM sp_customer_tier()` won't work.\n- **Month not filtered:** `sp_monthly_report` still adds up every order item regardless of month, exactly like the Oracle original. I kept that so the results match, but it's probably a bug in the original.",
+  "files_changed": 2,
+  "output_text": "### FILE: postgres/schema.sql\n```\n-- PostgreSQL DDL translated from oracle/sp_customer_tier.sql and oracle/sp_monthly_report.sql\n-- Type mapping: NUMBER -> numeric / bigint (integer keys), NUMBER(p,s) -> numeric(p,s),\n--               Oracle varchar type -> varchar(n), DATE -> timestamptz\n\nCREATE TABLE customers (\n    customer_id   bigint PRIMARY KEY,\n    customer_name varchar(120) NOT NULL,\n    status        varchar(20)  DEFAULT 'ACTIVE'\n);\n\nCREATE TABLE orders (\n    order_id    bigint PRIMARY KEY,\n    customer_id bigint NOT NULL,\n    order_total numeric(12,2) NOT NULL,\n    order_date  timestamptz NOT NULL\n);\n\nCREATE TABLE customer_tiers (\n    customer_id    bigint PRIMARY KEY,\n    customer_name  varchar(120),\n    total_spend    numeric(12,2),\n    order_count    numeric,\n    tier           varchar(20),\n    computed_at    timestamptz\n);\n\nCREATE SEQUENCE seq_tier_id START WITH 1 INCREMENT BY 1;\n\nCREATE TABLE products (\n    product_id   bigint PRIMARY KEY,\n    product_name varchar(120),\n    category     varchar(60)\n);\n\nCREATE TABLE order_items (\n    order_item_id bigint PRIMARY KEY,\n    order_id      bigint,\n    product_id    bigint,\n    quantity      numeric,\n    unit_price    numeric(10,2)\n);\n\nCREATE TABLE monthly_report (\n    report_month   varchar(7),\n    category       varchar(60),\n    revenue        numeric(12,2),\n    units_sold     numeric\n);\n```\n\n### FILE: postgres/procedures.sql\n```\n-- PostgreSQL plpgsql translations of the Oracle procedures.\n-- Transaction control: the procedures run inside the caller's transaction.\n-- Oracle's explicit COMMIT/ROLLBACK are replaced by that transaction and by the\n-- implicit savepoint of the plpgsql EXCEPTION block. (Postgres rejects COMMIT\n-- in a block that has an EXCEPTION section, and rejects it when CALL is issued\n-- inside an explicit transaction.)\n\nCREATE OR REPLACE PROCEDURE sp_customer_tier()\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    rec      record;\n    v_tier   varchar(20);\n    v_status varchar(20);\nBEGIN\n    DELETE FROM customer_tiers;\n\n    FOR rec IN\n        SELECT o.customer_id,\n               c.customer_name,\n               SUM(o.order_total) AS total_spend,\n               COUNT(*)           AS order_count\n        FROM   orders o\n        JOIN   customers c ON c.customer_id = o.customer_id\n        WHERE  COALESCE(c.status, 'ACTIVE') = 'ACTIVE'\n        GROUP  BY o.customer_id, c.customer_name\n        ORDER  BY total_spend, o.customer_id\n    LOOP\n        IF rec.total_spend >= 1000 THEN\n            v_tier := 'GOLD';\n        ELSIF rec.total_spend >= 500 THEN\n            v_tier := 'SILVER';\n        ELSE\n            v_tier := 'BRONZE';\n        END IF;\n\n        INSERT INTO customer_tiers\n            (customer_id, customer_name, total_spend, order_count, tier, computed_at)\n        VALUES\n            (rec.customer_id, rec.customer_name, rec.total_spend, rec.order_count,\n             v_tier, now());\n    END LOOP;\n\n    -- Oracle row-limit predicate replaced by LIMIT 1.\n    -- (STRICT keeps Oracle's NO_DATA_FOUND behaviour on an empty table.)\n    SELECT status INTO STRICT v_status FROM customers LIMIT 1;\nEND;\n$$;\n\nCREATE OR REPLACE PROCEDURE sp_monthly_report(p_month varchar)\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    rec        record;\n    v_row      monthly_report;          -- composite row-type variable\n    v_has_data numeric := 0;\nBEGIN\n    -- Oracle counted one row from its dummy table; that is always 1.\n    v_has_data := 1;\n\n    DELETE FROM monthly_report WHERE report_month = p_month;\n\n    FOR rec IN\n        SELECT p.category                                     AS category,\n               COALESCE(SUM(oi.quantity * oi.unit_price), 0)  AS revenue,\n               COALESCE(SUM(oi.quantity), 0)                  AS units_sold\n        FROM   order_items oi\n        JOIN   products p ON p.product_id = oi.product_id\n        GROUP  BY p.category\n        ORDER  BY revenue DESC, p.category\n    LOOP\n        v_row.report_month := p_month;\n        v_row.category     := rec.category;\n        v_row.revenue      := rec.revenue;\n        v_row.units_sold   := rec.units_sold;\n\n        INSERT INTO monthly_report\n            (report_month, category, revenue, units_sold)\n        VALUES\n            (v_row.report_month, v_row.category, v_row.revenue, v_row.units_sold);\n    END LOOP;\n\n    IF v_has_data = 0 THEN\n        RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'e_no_data';\n    END IF;\nEXCEPTION\n    WHEN SQLSTATE 'P0002' THEN\n        -- e_no_data: work done in this block is rolled back by the implicit\n        -- savepoint; swallow the error as Oracle's handler did.\n        NULL;\n    WHEN OTHERS THEN\n        -- Block's changes are rolled back automatically; re-raise.\n        RAISE;\nEND;\n$$;\n```\n",
+  "passed": true,
+  "reason": "plpgsql translation matches golden result set; no oracle dialect tokens",
+  "checks": {
+    "dialect_clean": true,
+    "parity": true
+  },
+  "created_at": 1793450490.526704,
+  "tool_time_s": 1.3,
+  "thinking_time_s": 19.13
+}

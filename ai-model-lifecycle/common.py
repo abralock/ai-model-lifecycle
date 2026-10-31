@@ -8,6 +8,7 @@ even before the optional deps are installed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field, replace
@@ -102,6 +103,20 @@ class Pair:
 
 
 DEFAULT_SUITE = "sanity"
+# Thinking-effort sweep levels (runner.py --effort, report.py --by-effort),
+# in display order. Claude Code's --effort takes all five (CLI 2.1.314);
+# OpenCode Go's OpenAI-style reasoning_effort stops at high.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+GO_EFFORT_LEVELS = ("low", "medium", "high")
+
+
+def _budgets(raw: Any, key: str) -> list[float]:
+    budgets = [float(v) for v in raw]
+    if (not budgets
+            or any(v <= 0 or not math.isfinite(v) for v in budgets)
+            or sorted(set(budgets)) != budgets):
+        raise ValueError(f"{key} must be positive, finite, sorted and unique, got {raw!r}")
+    return budgets
 
 
 @dataclass
@@ -120,6 +135,13 @@ class Config:
     def report_name(self) -> str:
         """Scorecard filename for this suite: REPORT.md for sanity, else REPORT.<suite>.md."""
         return "REPORT.md" if self.suite == DEFAULT_SUITE else f"REPORT.{self.suite}.md"
+
+    @property
+    def effort_report_name(self) -> str:
+        """Effort-sweep table (report.py --by-effort): REPORT.effort.md for
+        sanity, else REPORT.<suite>.effort.md — never the main scorecard."""
+        stem = "REPORT" if self.suite == DEFAULT_SUITE else f"REPORT.{self.suite}"
+        return f"{stem}.effort.md"
 
     @property
     def temperature(self) -> float:
@@ -159,6 +181,24 @@ class Config:
     def thinking_time(self) -> bool:
         """Opt into client-observed thinking-time capture on streaming routes."""
         return bool(self.defaults.get("thinking_time", False))
+
+    @property
+    def time_budgets_s(self) -> list[float]:
+        """Pass@T reporting budgets (seconds): positive, finite, sorted, unique.
+        A budget is a reporting threshold only — it never cancels a call."""
+        return _budgets(self.defaults.get("time_budgets_s", [30, 60, 120]), "time_budgets_s")
+
+    @property
+    def agentic_time_budgets_s(self) -> list[float]:
+        """Pass@T budgets for agentic attempts (agentic.py), which build and
+        test for minutes; the same rules as time_budgets_s."""
+        return _budgets(self.defaults.get("agentic_time_budgets_s", [120, 300, 600]),
+                        "agentic_time_budgets_s")
+
+    @property
+    def effort(self) -> str | None:
+        """Claude Code's --effort when the suite's `reasoning` names none."""
+        return self.defaults.get("effort") or None
 
     @property
     def reasoning(self) -> dict[str, Any] | None:

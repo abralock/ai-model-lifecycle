@@ -198,3 +198,72 @@ def test_unverified_result_is_not_cached(tmp_path):
     assert cache("r2_gwt_to_angular", "answer", "m").passed is False
     cache("r2_gwt_to_angular", "answer", "m")
     assert len(calls) == 2 and not (tmp_path / "cache.json").exists()
+
+
+def test_a_changed_hidden_test_invalidates_cached_verdicts(tmp_path, monkeypatch):
+    """Hidden test fixtures decide a verdict as much as scorer code does, so
+    they are part of the cache key (fixed 2026-10-31: r1b's forwarding test)."""
+    import score_cache
+    (tmp_path / "scorers" / "fixtures").mkdir(parents=True)
+    (tmp_path / "scorers" / "r1b_scorer.py").write_text("x = 1\n")
+    test = tmp_path / "scorers" / "fixtures" / "ClientForwardControllerTest.java"
+    test.write_text("class A {}")
+    monkeypatch.setattr(score_cache, "HARNESS_DIR", tmp_path)
+    before = score_cache._scorer_fingerprint()
+    test.write_text("class B {}")
+    assert score_cache._scorer_fingerprint() != before
+
+
+# --------------------------------------------------------------------------- #
+# descriptive timing metrics (docs/METRICS_PLAN.md)                            #
+# --------------------------------------------------------------------------- #
+def _timed_rec(*, ok=True, latency=10.0, thinking=None, execution=None):
+    rec = {"case_id": "r3_oracle_to_postgres", "role": "target", "model_slug": "m",
+           "model_name": "m", "ok": ok, "error": None if ok else "empty completion",
+           "input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0,
+           "cache_write_tokens": 0, "total_tokens": 2, "latency_s": latency,
+           "output_text": "x", "billed_cost_usd": None, "provider": "opencode-go"}
+    if thinking is not None:
+        rec["thinking_time_s"] = thinking
+    if execution is not None:
+        rec["execution_time_s"] = execution
+    return rec
+
+
+def test_model_metrics_exports_descriptive_timing_fields():
+    a = report.aggregate([_timed_rec(latency=10.0, thinking=4.0, execution=2.0),
+                          _timed_rec(ok=False, latency=99.0)],
+                         score=False)[("m", "target")]
+    m = mlflow_export.model_metrics(a, None, budgets=[30, 60])
+    assert m["mean_ttfs_s"] == pytest.approx(10.0)
+    assert m["pass_at_30s"] == pytest.approx(0.5)
+    assert m["pass_at_60s"] == pytest.approx(0.5)
+    assert m["execution_thinking_time_ratio"] == pytest.approx(0.5)
+    assert m["paired_timing_runs"] == 1
+
+
+def test_model_metrics_omits_unavailable_timing_fields():
+    """Missing measurements are omitted, never logged as zero."""
+    a = report.aggregate([_timed_rec(ok=False, latency=5.0)], score=False)[("m", "target")]
+    m = mlflow_export.model_metrics(a, None, budgets=[30])
+    assert "mean_ttfs_s" not in m                      # no pass -> no TTFS
+    assert "execution_thinking_time_ratio" not in m    # no paired timing
+    assert m["pass_at_30s"] == 0.0                     # a true zero, not missing
+
+
+def test_role_reasoning_effort_handles_empty_and_mixed():
+    runs = [{"role": "current", "reasoning_requested": {"effort": "low"}},
+            {"role": "current", "reasoning_requested": {"effort": "low"}}]
+    assert mlflow_export._role_reasoning_effort(runs, "current") == "low"
+    assert mlflow_export._role_reasoning_effort(runs, "target") == "not recorded"
+    runs.append({"role": "current", "reasoning_requested": {"effort": "high"}})
+    assert mlflow_export._role_reasoning_effort(runs, "current") == "mixed"
+
+
+def test_call_timing_guard_rejects_bool():
+    """report.py's aggregate excludes bool thinking_time_s; the export must
+    agree with the scorecard on the same record."""
+    assert mlflow_export._timing(4.0) == 4.0
+    assert mlflow_export._timing(True) is None
+    assert mlflow_export._timing(None) is None
+    assert mlflow_export._timing("3") is None

@@ -1,0 +1,41 @@
+{
+  "pair_id": "sonnet-5.5-cc-vs-deepseek-v4-pro",
+  "case_id": "r3_oracle_to_postgres",
+  "model_slug": "claude-sonnet-5-5",
+  "model_name": "Claude Sonnet 5.5 (CC)",
+  "role": "current",
+  "rep": 1,
+  "run_id": "20261031T120615Z",
+  "mode": "agentic",
+  "effort_override": "medium",
+  "reasoning_requested": {
+    "effort": "medium"
+  },
+  "time_limit_s": 1200,
+  "goal": "postgres/schema.sql and postgres/procedures.sql exist; applied in that order to an empty database and loaded with seed.sql, sp_customer_tier() returns exactly the rows in expected/output.csv and sp_monthly_report('2026-09') exactly the rows in expected/output_monthly.csv; and neither file uses DUAL, NVL(, ROWNUM, (+), VARCHAR2 or sysdate.",
+  "provider": "claude-code",
+  "ok": true,
+  "error": null,
+  "timed_out": false,
+  "latency_s": 41.9,
+  "num_turns": 4,
+  "tool_calls": 3,
+  "duration_api_ms": 38701,
+  "input_tokens": 8,
+  "output_tokens": 3670,
+  "cache_read_tokens": 67017,
+  "cache_write_tokens": 9162,
+  "cost_estimate_usd": 0.08203456999999999,
+  "final_message": "I converted both procedures to plpgsql. After loading the schema, procedures and seed data into a clean database, both calls return exactly the rows in `expected/output.csv` and `expected/output_monthly.csv`. I compared the output by eye against the CSVs; I didn't run a diff.\n\nThe files are `postgres/schema.sql` and `postgres/procedures.sql`. A grep finds none of `DUAL`, `NVL(`, `ROWNUM`, `(+)`, `VARCHAR2`, `sysdate`, `%ROWTYPE` or `%TYPE` in either one. I dropped the `%TYPE` and `%ROWTYPE` declarations in favour of plain `varchar(20)` and `record`.\n\n- **Row order:** The golden files come from Oracle's unspecified grouping order, so I added an `ORDER BY` to each loop to reproduce it. Tiers are inserted by ascending total spend, and the monthly report by descending revenue. If the seed data changes, those orderings may no longer match Oracle's.\n- **`p_month` filter:** As in the Oracle source, `sp_monthly_report` doesn't filter `order_items` by `p_month`. It only stamps the month on the rows it writes.\n- **`COMMIT`/`ROLLBACK`:** I removed these from both procedures. PostgreSQL doesn't allow `COMMIT` inside a block that has an exception handler, so the `WHEN OTHERS ... RAISE` handler is gone too. Errors now propagate as they are. The `e_no_data` case is handled with `no_data_found`, and the surrounding transaction rolls back the failed block on its own.\n- **`SELECT ... INTO` the first customer:** The Oracle `ROWNUM = 1` query became `LIMIT 1`, and I kept it even though nothing uses its result.",
+  "files_changed": 2,
+  "output_text": "### FILE: postgres/schema.sql\n```\nCREATE TABLE customers (\n    customer_id   bigint PRIMARY KEY,\n    customer_name varchar(120) NOT NULL,\n    status        varchar(20) DEFAULT 'ACTIVE'\n);\nCREATE TABLE orders (\n    order_id    bigint PRIMARY KEY,\n    customer_id bigint NOT NULL,\n    order_total numeric(12,2) NOT NULL,\n    order_date  timestamptz NOT NULL\n);\nCREATE TABLE customer_tiers (\n    customer_id   bigint PRIMARY KEY,\n    customer_name varchar(120),\n    total_spend   numeric(12,2),\n    order_count   numeric,\n    tier          varchar(20),\n    computed_at   timestamptz\n);\nCREATE SEQUENCE seq_tier_id START WITH 1 INCREMENT BY 1;\nCREATE TABLE products (\n    product_id   bigint PRIMARY KEY,\n    product_name varchar(120),\n    category     varchar(60)\n);\nCREATE TABLE order_items (\n    order_item_id bigint PRIMARY KEY,\n    order_id      bigint,\n    product_id    bigint,\n    quantity      numeric,\n    unit_price    numeric(10,2)\n);\nCREATE TABLE monthly_report (\n    report_month varchar(7),\n    category     varchar(60),\n    revenue      numeric(12,2),\n    units_sold   numeric\n);\n```\n\n### FILE: postgres/procedures.sql\n```\nCREATE OR REPLACE PROCEDURE sp_customer_tier()\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    v_tier   varchar(20);\n    v_status varchar(20);\n    rec      record;\nBEGIN\n    DELETE FROM customer_tiers;\n\n    FOR rec IN\n        SELECT o.customer_id,\n               c.customer_name,\n               SUM(o.order_total) AS total_spend,\n               COUNT(*)           AS order_count\n        FROM   orders o\n        JOIN   customers c ON c.customer_id = o.customer_id\n        WHERE  COALESCE(c.status, 'ACTIVE') = 'ACTIVE'\n        GROUP  BY o.customer_id, c.customer_name\n        ORDER  BY SUM(o.order_total), o.customer_id\n    LOOP\n        IF rec.total_spend >= 1000 THEN\n            v_tier := 'GOLD';\n        ELSIF rec.total_spend >= 500 THEN\n            v_tier := 'SILVER';\n        ELSE\n            v_tier := 'BRONZE';\n        END IF;\n\n        INSERT INTO customer_tiers\n            (customer_id, customer_name, total_spend, order_count, tier, computed_at)\n        VALUES\n            (rec.customer_id, rec.customer_name, rec.total_spend, rec.order_count,\n             v_tier, now());\n    END LOOP;\n\n    SELECT status INTO v_status FROM customers LIMIT 1;\nEND;\n$$;\n\nCREATE OR REPLACE PROCEDURE sp_monthly_report(p_month varchar)\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    v_has_data numeric := 0;\n    rec        record;\nBEGIN\n    SELECT COUNT(*) INTO v_has_data FROM (SELECT 1) AS one_row;\n\n    DELETE FROM monthly_report WHERE report_month = p_month;\n\n    FOR rec IN\n        SELECT p.category AS category,\n               COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS revenue,\n               COALESCE(SUM(oi.quantity), 0)                 AS units_sold\n        FROM   order_items oi\n        JOIN   products p ON p.product_id = oi.product_id\n        GROUP  BY p.category\n        ORDER  BY 2 DESC, 1\n    LOOP\n        INSERT INTO monthly_report (report_month, category, revenue, units_sold)\n        VALUES (p_month, rec.category, rec.revenue, rec.units_sold);\n    END LOOP;\n\n    IF v_has_data = 0 THEN\n        RAISE EXCEPTION 'no data' USING ERRCODE = 'P0002';\n    END IF;\nEXCEPTION\n    WHEN no_data_found THEN\n        NULL;  -- subtransaction is rolled back automatically\nEND;\n$$;\n```\n",
+  "passed": true,
+  "reason": "plpgsql translation matches golden result set; no oracle dialect tokens",
+  "checks": {
+    "dialect_clean": true,
+    "parity": true
+  },
+  "created_at": 1793448578.1811042,
+  "tool_time_s": 0.26,
+  "thinking_time_s": 4.29
+}

@@ -89,3 +89,30 @@ outweigh that: 123.5, and its pass rate is not lower, so ✅.
 - **Not checked by the score:** the plan's extra exit criteria (for example a 100%
   pass floor on certain tasks) are not enforced by `report.py`. Read the per-task
   table in the report for those.
+
+## Descriptive timing metrics
+
+TTFS, Pass@T and the Execution/Thinking time ratio (docs/METRICS_PLAN.md,
+docs/LATENCY.md) are descriptive rows on the scorecard. They do not alter the
+Quality, Cost or Time components, the current = 100 normalization, the weighted
+overall score, or the verdict.
+
+## Repair rounds are not scores
+
+`repair.py` measures how far a failed answer is from a pass: the model sees what CI
+reported (failed checks, build and test output, the current files the errors name;
+never the hidden test suite), replies with fix-up blocks, and the fix-up is scored on
+top of its earlier answer — its own edits must still apply. That is an agentic,
+multi-turn result. It lives under `runs/<pair>/repair/<run>/` and never changes the
+single-shot pass rate, the Quality/Cost/Time components, the overall score or the
+verdict.
+
+## Docs-assisted runs are not scores either
+
+`runner.py --docs context7` gives Claude Code models one tool source — Context7's
+MCP server of up-to-date library documentation — and records every lookup
+(`docs_calls`). `--strict-mcp-config` stays on, so no other MCP server the user has
+configured reaches the model. Like effort sweeps, docs-assisted runs never become a
+pair's REPORT.md and never reach the leaderboard; score one with
+`report.py --run <run id>`, whose header names the docs tool and the lookup counts.
+OpenCode Go and OpenRouter models are refused until the harness has a tool-calling loop.

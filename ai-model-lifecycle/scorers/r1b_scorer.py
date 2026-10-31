@@ -159,7 +159,9 @@ def run_e2e(project: Path, res: ScoreResult) -> bool:
         return False
 
     port, name = _free_port(), f"r1b-app-{uuid.uuid4().hex[:8]}"
-    rc, out = _run(["docker", "run", "-d", "--rm", "--name", name, "-p", f"127.0.0.1:{port}:8080",
+    # No --rm: an app that crashes at startup must leave its container (and
+    # its logs) behind for `docker logs`; the finally block removes it.
+    rc, out = _run(["docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:8080",
                     "-v", f"{project}:/w", "-w", "/w", MAVEN_IMAGE,
                     "java", "-jar", f"target/{jars[0].name}", "--spring.profiles.active=dev"])
     if rc != 0:
@@ -167,9 +169,9 @@ def run_e2e(project: Path, res: ScoreResult) -> bool:
         return False
     try:
         if not _wait_http(f"http://127.0.0.1:{port}/management/health", 240):
-            _, logs = _run(["docker", "logs", "--tail", "60", name])
+            _, logs = _run(["docker", "logs", "--tail", "120", name])
             res.details["e2e"] = "app did not become healthy within 240s"
-            res.details["e2e_tail"] = logs[-1500:]
+            res.details["e2e_tail"] = logs[-3000:]
             return False
         # Every spec starts with cy.visit('/'), which needs a 2xx. If the app does not serve
         # the frontend, all 54 tests fail anyway, slowly (each waits out its timeouts, then
@@ -191,7 +193,11 @@ def run_e2e(project: Path, res: ScoreResult) -> bool:
         _run(["docker", "rm", "-f", name])
 
 
-def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None) -> ScoreResult:
+def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None,
+          base: Path | None = None) -> ScoreResult:
+    """Score an answer applied onto `base` (default: the pristine project).
+    repair.py passes the tree an earlier answer produced, so a repair round's
+    fix-up is checked exactly as CI would check it on top of that answer."""
     res = ScoreResult(case_id=CASE_ID, model_slug=model_slug)
     if not parse_files(output_text) and not parse_edits(output_text):
         res.reason = "no `### FILE:` or `### EDIT:` blocks found in model output"
@@ -201,7 +207,7 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
     tmp.mkdir(parents=True, exist_ok=True)
     try:
         sources.ensure(CASE_ID)                 # fetched from the fork, see cases/sources.py
-        shutil.copytree(PROJECT, tmp, dirs_exist_ok=True)
+        shutil.copytree(base or PROJECT, tmp, dirs_exist_ok=True)
         applied = apply_output(output_text, tmp, strip_prefix="project/")
         res.details.update(files_written=applied.written, files_deleted=applied.deleted,
                            files_edited=sorted(set(applied.edited)),

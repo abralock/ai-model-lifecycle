@@ -38,8 +38,9 @@ import json
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
-from common import RUNS_DIR, Config, list_runs, load_config, load_env, load_runs
+from common import EFFORT_LEVELS, RUNS_DIR, Config, list_runs, load_config, load_env, load_runs
 from pricing import DEFAULT_PRICE, cost_usd, get_price
 from scorers.dispatch import score_case
 
@@ -84,6 +85,15 @@ class ModelAgg:
     latency_sum: float = 0.0
     thinking_time_sum: float = 0.0
     thinking_time_runs: int = 0       # calls with streaming measurements (legacy runs have none)
+    # Descriptive timing metrics (docs/METRICS_PLAN.md) — they never feed the
+    # weighted overall score.
+    ttfs_sum: float = 0.0             # latency over passing attempts only
+    outcomes: list[tuple[float, bool]] = field(default_factory=list)  # (latency_s, passed)
+    paired_thinking_sum: float = 0.0  # calls where BOTH phases were measured
+    paired_execution_sum: float = 0.0
+    paired_timing_runs: int = 0
+    execution_time_sum: float = 0.0   # visible-answer phase, over measured calls
+    execution_time_runs: int = 0
     case_results: dict[str, list[int]] = field(default_factory=dict)  # case -> [passes, runs]
     failures: list[tuple[str, str]] = field(default_factory=list)      # (file, reason)
 
@@ -98,6 +108,33 @@ class ModelAgg:
     @property
     def mean_thinking_time(self) -> float:
         return (self.thinking_time_sum / self.thinking_time_runs) if self.thinking_time_runs else 0.0
+
+    @property
+    def mean_execution_time(self) -> float | None:
+        return (self.execution_time_sum / self.execution_time_runs
+                if self.execution_time_runs else None)
+
+    @property
+    def mean_ttfs(self) -> float | None:
+        """Mean latency of passing attempts; None (n/a) without a pass."""
+        return (self.ttfs_sum / self.passes) if self.passes else None
+
+    def pass_at(self, budget_s: float) -> float:
+        """Share of scored attempts that passed within the budget (inclusive).
+        Failures and slow passes stay in the denominator; infra errors are
+        excluded upstream (they never enter `outcomes`)."""
+        if not self.outcomes:
+            return 0.0
+        hits = sum(1 for latency, passed in self.outcomes if passed and latency <= budget_s)
+        return hits / len(self.outcomes)
+
+    @property
+    def execution_thinking_ratio(self) -> float | None:
+        """sum(execution) / sum(thinking) over calls measuring both phases;
+        None without pairs or with zero total thinking (never inferred)."""
+        if not self.paired_timing_runs or self.paired_thinking_sum <= 0:
+            return None
+        return self.paired_execution_sum / self.paired_thinking_sum
 
     @property
     def pass_ci(self) -> tuple[float, float]:
@@ -152,14 +189,33 @@ def is_infra_error(rec: dict) -> bool:
 
 
 def reasoning_level(rec: dict) -> str:
-    """Effective reasoning effort recorded on a call, for MLflow filtering."""
-    requested = rec.get("reasoning_requested") or {}
-    effort = requested.get("effort") if isinstance(requested, dict) else None
-    return str(effort) if effort else "not recorded"
+    """Effective reasoning request recorded on a call, for MLflow filtering.
+    OpenRouter suites request thinking as a budget ({max_tokens: N}) rather
+    than an effort level — that is still a recorded request."""
+    requested = rec.get("reasoning_requested")
+    if not isinstance(requested, dict):
+        return "not recorded"
+    if requested.get("effort"):
+        return str(requested["effort"])
+    if requested.get("max_tokens"):
+        return f"max_tokens={requested['max_tokens']}"
+    return "not recorded"
 
 
-def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
-    """Aggregate run records into {(model_slug, role): ModelAgg}."""
+def _timing_value(v: Any) -> float | None:
+    """A stream-phase measurement, or None. A missing measurement is never
+    zero, and bool is not a number here."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return max(0.0, float(v))
+    return None
+
+
+def aggregate(runs: list[dict], score: bool,
+              scorer=None) -> dict[tuple[str, str], ModelAgg]:
+    """Aggregate run records into {(model_slug, role): ModelAgg}.
+
+    `scorer` (default: the live scorers) lets callers pass a cached one
+    (score_cache.ScoreCache); it is only used when `score` is on."""
     aggs: dict[tuple[str, str], ModelAgg] = {}
     for rec in runs:
         slug = rec.get("model_slug", "?")
@@ -183,10 +239,18 @@ def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
         a.total_tokens += int(rec.get("total_tokens", 0) or 0)
         a.reasoning_tokens += int(rec.get("reasoning_tokens", 0) or 0)
         a.latency_sum += float(rec.get("latency_s", 0.0) or 0.0)
-        thinking_time = rec.get("thinking_time_s")
-        if isinstance(thinking_time, (int, float)) and not isinstance(thinking_time, bool):
-            a.thinking_time_sum += max(0.0, float(thinking_time))
+        thinking_time = _timing_value(rec.get("thinking_time_s"))
+        execution_time = _timing_value(rec.get("execution_time_s"))
+        if thinking_time is not None:
+            a.thinking_time_sum += thinking_time
             a.thinking_time_runs += 1
+        if execution_time is not None:
+            a.execution_time_sum += execution_time
+            a.execution_time_runs += 1
+        if thinking_time is not None and execution_time is not None:
+            a.paired_thinking_sum += thinking_time
+            a.paired_execution_sum += execution_time
+            a.paired_timing_runs += 1
         # cost: what OpenRouter billed when recorded, else Claude Code's
         # estimate at API list prices, else the price table
         billed = rec.get("billed_cost_usd")
@@ -214,13 +278,16 @@ def aggregate(runs: list[dict], score: bool) -> dict[tuple[str, str], ModelAgg]:
         # quality
         passed, reason = bool(rec.get("ok", False)), rec.get("error") or "runner not ok"
         if score:
-            sr = score_case(rec.get("case_id", ""), rec.get("output_text", "") or "", slug)
+            sr = (scorer or score_case)(rec.get("case_id", ""), rec.get("output_text", "") or "", slug)
             passed, reason = sr.passed, sr.reason
         cr = a.case_results.setdefault(rec.get("case_id", "?"), [0, 0])
         cr[1] += 1
+        latency = float(rec.get("latency_s", 0.0) or 0.0)
+        a.outcomes.append((latency, bool(passed)))
         if passed:
             a.passes += 1
             cr[0] += 1
+            a.ttfs_sum += latency
         else:
             a.failures.append((rec.get("_file", "?"), reason))
     return aggs
@@ -262,18 +329,50 @@ def suite_run_ids(cfg: Config, pair_id: str) -> list[str]:
             if any(r.get("case_id") in wanted for r in load_runs(pair_id, run=rid))]
 
 
+def is_effort_run(runs: list[dict]) -> bool:
+    """A thinking-effort sweep run (runner.py --effort): it overrides the
+    configured effort, so it is reported by --by-effort, never as the scorecard."""
+    return any(r.get("effort_override") for r in runs)
+
+
+def is_variant_run(runs: list[dict]) -> bool:
+    """A run that is not plain single-shot Gate 1: an effort sweep or a
+    docs-assisted run (runner.py --docs). Reported on its own (--by-effort,
+    --run <id>), never as the scorecard or on the leaderboard."""
+    return is_effort_run(runs) or any(r.get("docs_tool") for r in runs)
+
+
 def pick_run(cfg: Config, pair_id: str) -> tuple[str | None, list[str]]:
     """The latest complete run id, plus the newer partial run ids skipped for it.
 
-    No complete run at all -> the latest run (its header then flags it partial).
+    Effort-sweep and docs-assisted runs are left out entirely (see
+    is_variant_run). No complete
+    run at all -> the latest run (its header then flags it partial).
     """
-    ids = suite_run_ids(cfg, pair_id)
+    loaded = {rid: load_runs(pair_id, run=rid) for rid in suite_run_ids(cfg, pair_id)}
+    ids = [rid for rid, recs in loaded.items() if not is_variant_run(recs)]
     skipped: list[str] = []
     for rid in reversed(ids):
-        if not missing_cases(cfg, load_runs(pair_id, run=rid)):
+        if not missing_cases(cfg, loaded[rid]):
             return rid, skipped
         skipped.append(rid)
     return (ids[-1] if ids else None), []
+
+
+def effort_runs(cfg: Config, pair_id: str) -> dict[tuple[str, str], tuple[str, list[dict]]]:
+    """(role, effort level) -> (run id, that role's records), from the LATEST
+    run holding that role at that level. One-sided runs (runner.py --role)
+    count: each side of a sweep is read on its own."""
+    wanted = set(cfg.cases)
+    found: dict[tuple[str, str], tuple[str, list[dict]]] = {}
+    for rid in suite_run_ids(cfg, pair_id):             # oldest first: later runs win
+        groups: dict[tuple[str, str], list[dict]] = {}
+        for rec in load_runs(pair_id, run=rid):
+            level = rec.get("effort_override")
+            if level and rec.get("case_id") in wanted:
+                groups.setdefault((rec.get("role", "?"), level), []).append(rec)
+        found.update({key: (rid, recs) for key, recs in groups.items()})
+    return found
 
 
 def _providers(a: ModelAgg) -> str:
@@ -301,7 +400,8 @@ def _cost_source(a: ModelAgg) -> str:
 
 
 def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg],
-                runs: list[dict], score: bool, skipped: list[str] | None = None) -> str:
+                runs: list[dict], score: bool, skipped: list[str] | None = None,
+                time_budgets: list[float] | None = None) -> str:
     pair = cfg.get_pair(pair_id)
     cur = aggs.get((pair.current.id, "current"))
     tgt = aggs.get((pair.target.id, "target"))
@@ -328,6 +428,11 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     thinking = {json.dumps(r.get("reasoning_requested"), sort_keys=True) for r in runs}
     if thinking != {"null"} and runs:
         lines.append(f"> Thinking budget sent: {', '.join(sorted(thinking))} (recorded per call)  ")
+    if docs := sorted({r["docs_tool"] for r in runs if r.get("docs_tool")}):
+        looked = {role: sum(len(r.get("docs_calls") or []) for r in runs if r.get("role") == role)
+                  for role in ("current", "target")}
+        lines.append(f"> Docs tool: {', '.join(docs)} — docs-assisted, not single-shot "
+                     f"(current {looked['current']} lookups, target {looked['target']} lookups)  ")
     if skipped:
         lines.append(f"> Newer partial run(s) not scored here: {', '.join(skipped)} "
                      f"(see `report.py --run <id>`).  ")
@@ -365,6 +470,33 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
                           if cur.thinking_time_runs and tgt.thinking_time_runs else "n/a")
         lines.append(f"| Thinking stream time (mean, s) | {thinking_cell(cur)} | {thinking_cell(tgt)} | "
                      f"{thinking_delta} |")
+    # Descriptive timing metrics (docs/METRICS_PLAN.md): they never feed the
+    # Quality/Cost/Time components or the verdict.
+    budgets = time_budgets if time_budgets is not None else cfg.time_budgets_s
+
+    def ttfs_cell(a: ModelAgg) -> str:
+        return (f"{a.mean_ttfs:.2f} ({a.passes}/{a.runs} passed)"
+                if a.mean_ttfs is not None else "n/a")
+
+    ttfs_delta = (_delta(cur.mean_ttfs, tgt.mean_ttfs, higher_better=False)
+                  if cur.mean_ttfs is not None and tgt.mean_ttfs is not None else "n/a")
+    lines.append(f"| TTFS (mean successful-attempt latency, s) | {ttfs_cell(cur)} | "
+                 f"{ttfs_cell(tgt)} | {ttfs_delta} |")
+    for budget in budgets:
+        c, t = cur.pass_at(budget), tgt.pass_at(budget)
+        lines.append(f"| Pass@{budget:g}s | {_pct(c * 100)} | {_pct(t * 100)} | "
+                     f"{_delta(c, t)} |")
+
+    def ratio_cell(a: ModelAgg) -> str:
+        r = a.execution_thinking_ratio
+        return (f"{r:.2f} ({a.paired_timing_runs}/{a.runs} measured)"
+                if r is not None else "n/a")
+
+    ratio_delta = (_delta(cur.execution_thinking_ratio, tgt.execution_thinking_ratio)
+                   if cur.execution_thinking_ratio is not None
+                   and tgt.execution_thinking_ratio is not None else "n/a")
+    lines.append(f"| Execution / thinking time ratio | {ratio_cell(cur)} | "
+                 f"{ratio_cell(tgt)} | {ratio_delta} |")
     lines.append(f"| Cost (total USD) | ${cur.cost_usd:.4f} | ${tgt.cost_usd:.4f} | "
                  f"{_delta(cur.cost_usd, tgt.cost_usd, higher_better=False)} |")
     lines.append(f"| Cost / run (USD) | ${cur.mean_cost:.4f} | ${tgt.mean_cost:.4f} | "
@@ -374,6 +506,9 @@ def render_pair(cfg: Config, pair_id: str, aggs: dict[tuple[str, str], ModelAgg]
     # via Claude Code vs open-weight via OpenCode Go) compares routes by
     # design: explain that instead of advising to pin one provider. A mix of
     # providers *within* one model's runs still warns either way.
+    if not score:
+        lines.append("> TTFS and Pass@T reflect the runner completion flag (--no-score), "
+                     "not verified task correctness.\n")
     cross_gateway = (pair.current.api or "") != (pair.target.api or "")
     mixed_within = len(cur.providers) > 1 or len(tgt.providers) > 1
     if cross_gateway:
@@ -516,6 +651,120 @@ def overall_score(cur: ModelAgg, tgt: ModelAgg) -> Overall | None:
     return Overall(q, c, t, overall, verdict)
 
 
+def _level_key(level: str) -> tuple[int, str]:
+    """Sweep levels in EFFORT_LEVELS order (low -> high), unknown ones after."""
+    if level in EFFORT_LEVELS:
+        return EFFORT_LEVELS.index(level), level
+    return len(EFFORT_LEVELS), level
+
+
+def _num(v: float | None, spec: str = ".2f") -> str:
+    return "n/a" if v is None else format(v, spec)
+
+
+def render_effort_report(cfg: Config, pair_id: str, score: bool,
+                         time_budgets: list[float] | None = None) -> str:
+    """One table row per model x thinking effort (runner.py --effort), plus the
+    main scorecard's run as a "default" baseline, and thinking time by task.
+    Descriptive only: nothing here feeds the overall score or the verdict."""
+    pair = cfg.get_pair(pair_id)
+    budgets = time_budgets if time_budgets is not None else cfg.time_budgets_s
+    sweeps = effort_runs(cfg, pair_id)
+    default_rid, _ = pick_run(cfg, pair_id)
+    default_recs = load_runs(pair_id, run=default_rid) if default_rid else []
+
+    # (role, label, run id, records, aggregate), low -> high, then default
+    rows: list[tuple[str, str, str, list[dict], ModelAgg]] = []
+    for role in ("current", "target"):
+        for _, level in sorted((k for k in sweeps if k[0] == role),
+                               key=lambda k: _level_key(k[1])):
+            rid, recs = sweeps[(role, level)]
+            rows.append((role, level, rid, recs, next(iter(aggregate(recs, score).values()))))
+        base = [r for r in default_recs if r.get("role") == role]
+        if base:
+            levels = {reasoning_level(r) for r in base}
+            level = levels.pop() if len(levels) == 1 else "mixed"
+            label = "default (model default)" if level == "not recorded" else f"default ({level})"
+            rows.append((role, label, default_rid, base,
+                         next(iter(aggregate(base, score).values()))))
+
+    generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    lines = [
+        f"# Gate 1 effort sweep — {pair_id} · {cfg.suite} suite",
+        "",
+        f"> Generated: {generated}  ",
+        f"> Current: **{pair.current.name}** (`{pair.current.id}`) · "
+        f"Target: **{pair.target.name}** (`{pair.target.id}`)  ",
+        f"> Live scoring: {'on' if score else 'off (--no-score)'}  ",
+        "",
+        "One row per model × thinking effort. Each level is its own run "
+        "(`runner.py --effort low,medium,high`); **default** is the main scorecard's run, "
+        "at the effort `models.yaml` sends. Thinking and answer times are client-observed "
+        "stream phases (docs/LATENCY.md) and need `thinking_time: true`; `n/a` means the "
+        "run was not instrumented. Descriptive only: these rows feed no score or verdict.",
+        "",
+    ]
+    if not rows:
+        lines.append("_No runs yet. Sweep with "
+                     f"`python runner.py --pair {pair_id} --effort low,medium,high`._")
+        return "\n".join(lines) + "\n"
+
+    header = ["Model", "Effort", "Run", "Passed", "Mean latency (s)", "Thinking (s)",
+              "Answer (s)", "Answer ÷ thinking", "Thinking tokens / call", "TTFS (s)",
+              *[f"Pass@{b:g}s" for b in budgets], "Cost / run (USD)"]
+    lines += ["## Summary", "",
+              "| " + " | ".join(header) + " |",
+              "|---|---|---|" + "---:|" * (len(header) - 3)]
+    notes: list[str] = []
+    for role, label, rid, recs, a in rows:
+        name = recs[0].get("model_name") or recs[0].get("model_slug", role)
+        passed = f"{a.passes}/{a.runs}" + (f" (+{a.infra_errors} infra)" if a.infra_errors else "")
+        thinking = _num(a.mean_thinking_time if a.thinking_time_runs else None)
+        if a.thinking_time_runs and a.thinking_time_runs < a.runs:
+            thinking += f" ({a.thinking_time_runs}/{a.runs})"
+        cells = [
+            name, label, f"`{rid}`", passed,
+            _num(a.mean_latency if a.runs else None),
+            thinking,
+            _num(a.mean_execution_time),
+            _num(a.execution_thinking_ratio),
+            _num(a.reasoning_tokens / a.runs if a.runs else None, ",.0f"),
+            _num(a.mean_ttfs),
+            *[_pct(a.pass_at(b) * 100) if a.runs else "n/a" for b in budgets],
+            f"${a.mean_cost:.4f}" if a.runs else "n/a",
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+        missing = sorted(set(cfg.cases) - {r.get("case_id") for r in recs})
+        if missing:
+            notes.append(f"> {name} · {label}: partial run — no {', '.join(missing)}.")
+    lines.append("")
+    if notes:
+        lines += notes + [""]
+
+    lines += ["## Thinking time by task", "",
+              "Mean thinking seconds per call · passes / scored runs.", ""]
+    for role in ("current", "target"):
+        mine = [row for row in rows if row[0] == role]
+        if not mine:
+            continue
+        name = mine[0][3][0].get("model_name") or role
+        labels = [row[1].split(" (")[0] for row in mine]
+        lines += [f"### {name}", "",
+                  "| Task | " + " | ".join(labels) + " |",
+                  "|---|" + "---:|" * len(labels)]
+        for case in cfg.cases:
+            cells = []
+            for _, _, _, recs, a in mine:
+                timed = [t for r in recs if r.get("case_id") == case and not is_infra_error(r)
+                         and (t := _timing_value(r.get("thinking_time_s"))) is not None]
+                k, n = a.case_results.get(case, [0, 0])
+                think = f"{sum(timed) / len(timed):.1f} s" if timed else "n/a"
+                cells.append(f"{think} · {k}/{n}" if n else "—")
+            lines.append(f"| {case} | " + " | ".join(cells) + " |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- #
 # CLI                                                                          #
 # --------------------------------------------------------------------------- #
@@ -532,6 +781,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list-runs", action="store_true", help="list the run ids per pair and exit")
     ap.add_argument("--no-score", action="store_true",
                     help="use runner ok-flag instead of live scorers (fast/offline)")
+    ap.add_argument("--time-budget", action="append", type=float, dest="time_budgets",
+                    metavar="SECONDS",
+                    help="Pass@T budget in seconds; repeatable. Default: the active "
+                         "suite's time_budgets_s from models.yaml")
+    ap.add_argument("--by-effort", action="store_true",
+                    help="write the thinking-effort sweep table (runs made with "
+                         "runner.py --effort) to REPORT[.<suite>].effort.md instead of "
+                         "the scorecard")
     args = ap.parse_args(argv)
 
     load_env()
@@ -551,15 +808,30 @@ def main(argv: list[str] | None = None) -> int:
                 recs = load_runs(pid, run=rid)
                 miss = missing_cases(cfg, recs)
                 note = f"partial, missing {', '.join(miss)}" if miss else "complete"
+                if is_effort_run(recs):
+                    levels = sorted({r["effort_override"] for r in recs if r.get("effort_override")})
+                    roles = sorted({r.get("role", "?") for r in recs})
+                    note = f"effort sweep: {', '.join(levels)} ({', '.join(roles)})"
+                if docs := sorted({r["docs_tool"] for r in recs if r.get("docs_tool")}):
+                    note += f" · docs-assisted: {', '.join(docs)}"
                 print(f"  {rid}  {len(recs):3d} files  {note}")
         return 0
 
     score = not args.no_score
+    if args.by_effort:
+        for pid in pair_ids:
+            md = render_effort_report(cfg, pid, score, time_budgets=args.time_budgets)
+            out = RUNS_DIR / pid / cfg.effort_report_name
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(md, encoding="utf-8")
+            print(f"wrote {out}")
+        return 0
     for pid in pair_ids:
         run, skipped = (args.run, []) if args.run else pick_run(cfg, pid)
         runs = load_runs(pid, run=run) if run else []
         aggs = aggregate(runs, score=score)
-        md = render_pair(cfg, pid, aggs, runs, score, skipped)
+        md = render_pair(cfg, pid, aggs, runs, score, skipped,
+                         time_budgets=args.time_budgets)
         out = RUNS_DIR / pid / cfg.report_name
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(md, encoding="utf-8")

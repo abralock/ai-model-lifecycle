@@ -27,8 +27,12 @@ SCORER_MAP: dict[str, str] = {
 }
 
 
-def score_case(case_id: str, output_text: str, model_slug: str = "") -> ScoreResult:
-    """Dispatch to the registered scorer for `case_id`, or return a skipped result."""
+def score_case(case_id: str, output_text: str, model_slug: str = "",
+               base: Path | None = None) -> ScoreResult:
+    """Dispatch to the registered scorer for `case_id`, or return a skipped result.
+
+    `base` (repair rounds only) is the project tree to apply the answer onto;
+    only the project-based scorers (r1b, r2) accept it."""
     mod_name = SCORER_MAP.get(case_id)
     if not mod_name:
         return ScoreResult(
@@ -42,6 +46,8 @@ def score_case(case_id: str, output_text: str, model_slug: str = "") -> ScoreRes
         import importlib
 
         mod = importlib.import_module(mod_name)
+        if base is not None:
+            return mod.score(output_text, model_slug=model_slug, base=base)
         return mod.score(output_text, model_slug=model_slug)
     except Exception as exc:  # noqa: BLE001 - a broken scorer must not kill the report
         return ScoreResult(

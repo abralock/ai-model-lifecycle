@@ -50,7 +50,6 @@ The server is MLFLOW_TRACKING_URI (default http://127.0.0.1:5050).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -60,44 +59,10 @@ from types import SimpleNamespace
 import common
 import report
 from common import load_config, load_env
-from scorers.dispatch import score_case as _score_case
-from verify_failures import _HARNESS_PATTERNS
+from score_cache import CACHE_FILE, ScoreCache  # noqa: F401 - re-exported for callers
 
 DEFAULT_TRACKING_URI = "http://127.0.0.1:5050"
 HARNESS_DIR = Path(__file__).resolve().parent
-CACHE_FILE = HARNESS_DIR / ".mlflow_score_cache.json"
-
-
-def _scorer_fingerprint() -> str:
-    h = hashlib.sha256()
-    for f in sorted((HARNESS_DIR / "scorers").rglob("*.py")):
-        h.update(f.read_bytes())
-    return h.hexdigest()[:16]
-
-
-class ScoreCache:
-    """Memoizes scorer results by (scorer source, case, answer)."""
-
-    def __init__(self, path: Path | None = CACHE_FILE, scorer=_score_case):
-        self.path, self.scorer = path, scorer
-        self.fp = _scorer_fingerprint()
-        self.data: dict = {}
-        if path and path.exists():
-            self.data = json.loads(path.read_text())
-
-    def __call__(self, case_id: str, output_text: str, slug: str):
-        key = hashlib.sha256(f"{self.fp}\0{case_id}\0{output_text}".encode()).hexdigest()
-        if key in self.data:
-            return SimpleNamespace(**self.data[key])
-        sr = self.scorer(case_id, output_text, slug)
-        result = {"passed": bool(sr.passed), "reason": sr.reason or ""}
-        # a harness failure (unverified, scorer crash) says nothing about the
-        # answer: keep it out of the cache so a fixed setup re-scores it
-        if not _HARNESS_PATTERNS.search(result["reason"]):
-            self.data[key] = result
-            if self.path:
-                self.path.write_text(json.dumps(self.data))
-        return SimpleNamespace(**result)
 
 
 def _short(slug: str) -> str:
@@ -209,9 +174,28 @@ def comparison_figure(pair, rid: str, cur, tgt, ov):
     return fig
 
 
-def model_metrics(a, components: dict[str, float] | None) -> dict[str, float]:
+def _timing(v) -> float | None:
+    """A stream-phase measurement, or None — matches report.py's aggregate so
+    the scorecard and MLflow agree on the same record (bool is not a number)."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    return None
+
+
+def _role_reasoning_effort(runs: list[dict], role: str) -> str:
+    """One label per model run: the single recorded level, 'mixed' when the
+    calls disagree, 'not recorded' when there is nothing to disagree about."""
+    levels = sorted({report.reasoning_level(r) for r in runs if r["role"] == role})
+    if not levels:
+        return "not recorded"
+    return levels[0] if len(levels) == 1 else "mixed"
+
+
+def model_metrics(a, components: dict[str, float] | None,
+                  budgets: list[float] | None = None) -> dict[str, float]:
     """One model's metrics. Names are shared by both models (model runs) and
-    prefixed current_/target_ on the pair run, so they line up in MLflow charts."""
+    prefixed current_/target_ on the pair run, so they line up in MLflow charts.
+    Unavailable measurements are omitted, never logged as zero."""
     m = {"pass_rate": a.pass_rate, "passes": a.passes, "scored_runs": a.runs,
          "cost_usd": a.cost_usd, "cost_per_task_usd": a.mean_cost,
          "mean_latency_s": a.mean_latency, "output_tokens": a.output_tokens,
@@ -219,6 +203,13 @@ def model_metrics(a, components: dict[str, float] | None) -> dict[str, float]:
     if a.thinking_time_runs:
         m["mean_thinking_time_s"] = a.mean_thinking_time
         m["thinking_time_runs"] = a.thinking_time_runs
+    if a.mean_ttfs is not None:
+        m["mean_ttfs_s"] = a.mean_ttfs
+    for budget in budgets or []:
+        m[f"pass_at_{budget:g}s"] = a.pass_at(budget)
+    if a.execution_thinking_ratio is not None:
+        m["execution_thinking_time_ratio"] = a.execution_thinking_ratio
+        m["paired_timing_runs"] = a.paired_timing_runs
     if a.passes:
         m["cost_per_passed_task_usd"] = a.cost_per_success
     for case, (k, n) in a.case_results.items():
@@ -286,7 +277,8 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
             mlflow.log_metric("overall_score", ov.overall)
         # current_X / target_X pairs, e.g. current_cost_component vs target_cost_component
         for role, a in (("current", cur), ("target", tgt)):
-            mlflow.log_metrics({f"{role}_{k}": v for k, v in model_metrics(a, comps[role]).items()})
+            mlflow.log_metrics({f"{role}_{k}": v for k, v in
+                                model_metrics(a, comps[role], budgets=cfg.time_budgets_s).items()})
         mlflow.log_text(md, cfg.report_name)
         fig = comparison_figure(pair, rid, cur, tgt, ov)
         mlflow.log_figure(fig, "comparison.png")
@@ -294,7 +286,8 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
 
         table: dict[str, list] = {k: [] for k in (
             "model", "role", "case", "rep", "result", "reason", "reasoning_effort",
-            "latency_s", "thinking_time_s", "output_tokens", "reasoning_tokens", "cost_usd", "provider")}
+            "latency_s", "thinking_time_s", "execution_time_s", "output_tokens",
+            "reasoning_tokens", "cost_usd", "provider")}
         # one run per model with the SAME metric names, so every MLflow chart
         # shows the two models (and earlier runs) side by side; mlflow.runColor
         # makes MLflow draw current in blue and target in orange
@@ -302,10 +295,9 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
                                       ("target", pair.target, tgt, TARGET_COLOR)):
             with mlflow.start_run(run_name=f"{model.name} ({role})", nested=True):
                 mlflow.set_tags({**common_tags, "level": "model", "role": role, "mlflow.runColor": color})
-                levels = sorted({report.reasoning_level(r) for r in runs if r["role"] == role})
                 mlflow.log_params({"model": model.name, "model_id": model.id, "role": role,
-                                   "reasoning_effort": levels[0] if len(levels) == 1 else "mixed"})
-                mlflow.log_metrics(model_metrics(a, comps[role]))
+                                   "reasoning_effort": _role_reasoning_effort(runs, role)})
+                mlflow.log_metrics(model_metrics(a, comps[role], budgets=cfg.time_budgets_s))
 
                 for rec in sorted((r for r in runs if r["role"] == role), key=lambda r: (r["case_id"], _rep(r))):
                     rep = _rep(rec)
@@ -323,8 +315,10 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
                                         "input_tokens": rec.get("input_tokens", 0),
                                         "output_tokens": rec.get("output_tokens", 0),
                                         "reasoning_tokens": rec.get("reasoning_tokens", 0), "cost_usd": cost}
-                        if isinstance(rec.get("thinking_time_s"), (int, float)):
-                            call_metrics["thinking_time_s"] = rec["thinking_time_s"]
+                        for field in ("thinking_time_s", "execution_time_s"):
+                            value = _timing(rec.get(field))
+                            if value is not None:
+                                call_metrics[field] = value
                         if not infra:
                             call_metrics["passed"] = int(sr.passed)
                         mlflow.log_metrics(call_metrics)
@@ -336,6 +330,7 @@ def export_run(mlflow, cfg, pair_id: str, rid: str, source: str, score) -> str:
                                  ("reasoning_effort", report.reasoning_level(rec)),
                                  ("latency_s", rec.get("latency_s", 0)),
                                  ("thinking_time_s", rec.get("thinking_time_s")),
+                                 ("execution_time_s", rec.get("execution_time_s")),
                                  ("output_tokens", rec.get("output_tokens", 0)),
                                  ("reasoning_tokens", rec.get("reasoning_tokens", 0)),
                                  ("cost_usd", cost), ("provider", provider)):

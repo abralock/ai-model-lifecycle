@@ -27,3 +27,6 @@ results/
 cases/r1b_jhipster_boot3/project/
 cases/r2_gwt_to_angular/gwt/
 cases/r2_gwt_to_angular/e2e/
+
+# agentic.py workspaces (deleted after each attempt)
+.agentic-work/

@@ -35,12 +35,15 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from cases import sources
 from common import (
+    EFFORT_LEVELS,
+    GO_EFFORT_LEVELS,
     ApiRef,
     Config,
     ModelRef,
@@ -116,6 +119,9 @@ class RunResult:
     # --- provider / billing (OpenRouter) ---
     provider_requested: dict[str, Any] | None = None   # routing prefs sent
     reasoning_requested: dict[str, Any] | None = None  # thinking budget sent (None = model default)
+    effort_override: str | None = None                  # runner.py --effort level (None = models.yaml)
+    docs_tool: str | None = None                        # runner.py --docs server (None = single-shot)
+    docs_calls: list[dict[str, Any]] | None = None      # each docs lookup the model made
     reasoning_tokens: int = 0                           # of output_tokens, spent thinking (if reported)
     provider: str | None = None                         # provider that served it
     billed_cost_usd: float | None = None                # OpenRouter usage.cost
@@ -128,8 +134,10 @@ class RunResult:
     duration_api_ms: int | None = None
     # --- timing ---
     latency_s: float = 0.0
-    # Client-observed reasoning-stream time; None on legacy/uninstrumented calls.
+    # Client-observed stream phases; None on legacy/uninstrumented calls, and
+    # never derived from each other or from latency (see docs/LATENCY.md).
     thinking_time_s: float | None = None
+    execution_time_s: float | None = None
     attempts: int = 0
     # --- payload ---
     prompt: str = ""
@@ -256,52 +264,94 @@ class CallResult(NamedTuple):
     num_turns: int | None = None
     duration_api_ms: int | None = None
     thinking_time_s: float | None = None
+    execution_time_s: float | None = None
+    docs_calls: list[dict[str, Any]] | None = None     # docs-assisted runs only
 
 
 class _ThinkingTimer:
-    """Measure client-observed reasoning phases in a streaming response.
+    """Measure client-observed reasoning and visible-answer phases in a
+    streaming response.
 
-    A phase starts at the first reasoning event and ends at the next visible
-    answer event (or at end-of-stream for a thinking-only response). This is
-    stream time, not provider-reported compute time.
+    A phase runs from its first event to the first event of the other phase
+    (or to end-of-stream). Execution time is measured, never derived as
+    latency minus thinking — that difference also contains startup, network
+    and CLI overhead. This is stream time, not provider-reported compute time.
     """
 
     def __init__(self):
-        self.total = 0.0
+        self.thinking = 0.0
+        self.execution = 0.0
+        self.phase: str | None = None
         self.started_at: float | None = None
         self.seen_reasoning = False
+        self.seen_answer = False
+
+    def _enter(self, phase: str, now: float) -> None:
+        if self.phase == phase:
+            return
+        self._close(now)
+        self.phase, self.started_at = phase, now
+
+    def _close(self, now: float) -> None:
+        if self.phase is not None and self.started_at is not None:
+            dt = max(0.0, now - self.started_at)
+            if self.phase == "thinking":
+                self.thinking += dt
+            else:
+                self.execution += dt
+        self.phase, self.started_at = None, None
 
     def reasoning(self, now: float) -> None:
         self.seen_reasoning = True
-        if self.started_at is None:
-            self.started_at = now
+        self._enter("thinking", now)
 
     def answer(self, now: float) -> None:
-        if self.started_at is not None:
-            self.total += max(0.0, now - self.started_at)
-            self.started_at = None
+        self.seen_answer = True
+        self._enter("answer", now)
 
-    def finish(self, now: float) -> float | None:
-        self.answer(now)
-        return self.total if self.seen_reasoning else None
+    def pause(self, now: float) -> None:
+        """End the current phase without starting another: waiting on a tool
+        (docs-assisted runs) is neither thinking nor answering."""
+        self._close(now)
+
+    def finish(self, now: float) -> tuple[float | None, float | None]:
+        """(thinking_time_s, execution_time_s).
+
+        A stream with no classified event yields (None, None): no measurement.
+        Inside an observed stream an absent phase is a measured 0.0 — a model
+        that answered without thinking (common at low effort) thought for 0 s,
+        and a thinking-only reply spent 0 s answering."""
+        self._close(now)
+        if not (self.seen_reasoning or self.seen_answer):
+            return None, None
+        return self.thinking, self.execution
+
+
+_DELTA_REASONING_KEYS = ("reasoning_content", "reasoning", "thinking_blocks", "reasoning_items")
 
 
 def _observe_stream_chunk(chunk: Any, timer: _ThinkingTimer, now: float) -> None:
-    """Classify one LiteLLM chat/messages chunk without consuming its payload."""
+    """Classify one LiteLLM chat/messages chunk without consuming its payload.
+
+    Attribute probes, not model_dump(): a full pydantic serialization per
+    token in the hot loop wastes CPU and delays the very timestamps being
+    measured."""
     choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
     if not choices:
         return
     choice = choices[0]
     delta = choice.get("delta") if isinstance(choice, dict) else getattr(choice, "delta", None)
-    if delta is not None and not isinstance(delta, dict) and hasattr(delta, "model_dump"):
-        delta = delta.model_dump()
-    if not isinstance(delta, dict):
+    if delta is None:
         return
-    reasoning = (delta.get("reasoning_content") or delta.get("reasoning")
-                 or delta.get("thinking_blocks") or delta.get("reasoning_items"))
+    if isinstance(delta, dict):
+        reasoning = any(delta.get(k) for k in _DELTA_REASONING_KEYS)
+        content = delta.get("content")
+    else:
+        reasoning = any(getattr(delta, k, None) for k in _DELTA_REASONING_KEYS)
+        content = getattr(delta, "content", None)
     if reasoning:
         timer.reasoning(now)
-    if delta.get("content"):
+    if content:
         timer.answer(now)
 
 
@@ -395,6 +445,48 @@ CLAUDE_CODE_FLAGS = [
     "--no-session-persistence",
 ]
 
+# Docs servers a docs-assisted run (runner.py --docs) may hand to Claude Code:
+# a remote MCP server, its optional API key (from .env, written only into a
+# private config file, never onto the command line) and the tools allowed.
+DOCS_SERVERS = {
+    "context7": {"url": "https://mcp.context7.com/mcp", "key_env": "CONTEXT7_API_KEY",
+                 "tools": ("resolve-library-id", "query-docs"),
+                 # Unmentioned, and with a soft "if you are unsure" hint, the
+                 # tools went unused on r1b (zero lookups, 2026-10-31): the
+                 # model is confidently wrong. Context7's own recommended rule
+                 # is directive, so this is too — it says to check, not what.
+                 "hint": ("You have the context7 tools (resolve-library-id, then query-docs) "
+                          "for up-to-date, version-specific library documentation. Before you "
+                          "write your answer, use them to check the current documentation of "
+                          "every library whose version you change: its dependencies, removed "
+                          "or moved APIs and configuration.")},
+}
+
+
+def _docs_lookups(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """MCP tool calls in one complete `assistant` stream-json message."""
+    if payload.get("type") != "assistant":
+        return []
+    calls = []
+    for block in (payload.get("message") or {}).get("content") or []:
+        name = block.get("name", "") if isinstance(block, dict) else ""
+        if block.get("type") == "tool_use" and name.startswith("mcp__"):
+            calls.append({"tool": name.split("__", 2)[-1], "input": block.get("input")})
+    return calls
+
+
+def _write_mcp_config(docs: str, dest: Path) -> Path:
+    """A private MCP config file for one call; the API key never leaves it."""
+    spec = DOCS_SERVERS[docs]
+    server: dict[str, Any] = {"type": "http", "url": spec["url"]}
+    if key := os.environ.get(spec["key_env"]):
+        server["headers"] = {"Authorization": f"Bearer {key}"}
+    path = dest / ".gate1-mcp.json"
+    path.write_text(json.dumps({"mcpServers": {docs: server}}), encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
 # Credentials that would make the CLI use something other than the claude.ai
 # login (an API key, a cloud provider, a proxy). Removed from the CLI's
 # environment so it can never bill an API key by accident.
@@ -410,7 +502,8 @@ _CC_STRIPPED_PREFIXES = (
 _CC_RETRY_STATUS = {429, 500, 502, 503, 504, 529}
 # The exact text of a subscription limit hit is not confirmed yet; match
 # conservatively and stop rather than retry into the limit.
-_CC_LIMIT_RE = re.compile(r"usage limit|rate limit|hit your limit", re.IGNORECASE)
+# "hit your limit", "hit your 5-hour limit", "hit your weekly limit", ...
+_CC_LIMIT_RE = re.compile(r"usage limit|rate limit|hit your (?:[\w-]+ )?limit", re.IGNORECASE)
 
 
 def _claude_code_env(max_tokens: int | None = None) -> dict[str, str]:
@@ -492,6 +585,8 @@ def _observe_claude_stream_event(payload: dict[str, Any], timer: _ThinkingTimer,
             timer.reasoning(now)
         elif block_type == "text":
             timer.answer(now)
+        elif block_type == "tool_use":
+            timer.pause(now)
     elif kind == "content_block_delta":
         delta_type = (event.get("delta") or {}).get("type")
         if delta_type in ("thinking_delta", "signature_delta"):
@@ -514,10 +609,13 @@ def _run_claude_code_stream(cmd: list[str], prompt: str, *, timeout_s: int,
         text=True, cwd=cwd, env=env, bufsize=1,
     )
     events: queue.Queue[tuple[str, str | None]] = queue.Queue()
-    stdout_lines: list[str] = []
+    # Only an error tail is ever read back from raw stream stdout (the answer
+    # arrives in the `result` event), so keep a bounded tail, not the whole
+    # partial-message stream (MB of JSONL on long answers).
+    stdout_tail: deque[str] = deque(maxlen=20)
     stderr_lines: list[str] = []
 
-    def reader(stream, name: str, dest: list[str]) -> None:
+    def reader(stream, name: str, dest) -> None:
         try:
             for line in stream:
                 dest.append(line)
@@ -525,20 +623,32 @@ def _run_claude_code_stream(cmd: list[str], prompt: str, *, timeout_s: int,
         finally:
             events.put((name, None))
 
+    def writer() -> None:
+        # The prompt can exceed the OS pipe buffer, so feed stdin off the main
+        # thread: a CLI that stalls before draining it must hit the inactivity
+        # timeout below, not block us in write(). A CLI that exits before
+        # consuming stdin raises BrokenPipeError here; its own output and exit
+        # code tell the real story (communicate() suppresses it the same way).
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
     threads = [
-        threading.Thread(target=reader, args=(proc.stdout, "stdout", stdout_lines), daemon=True),
+        threading.Thread(target=reader, args=(proc.stdout, "stdout", stdout_tail), daemon=True),
         threading.Thread(target=reader, args=(proc.stderr, "stderr", stderr_lines), daemon=True),
+        threading.Thread(target=writer, daemon=True),
     ]
     for thread in threads:
         thread.start()
 
     timer = _ThinkingTimer()
     result: dict[str, Any] | None = None
+    lookups: list[dict[str, Any]] = []
+    stream_end: float | None = None
     deadline = time.time() + timeout_s
     try:
-        assert proc.stdin is not None
-        proc.stdin.write(prompt)
-        proc.stdin.close()
         open_streams = 2
         while open_streams:
             remaining = deadline - time.time()
@@ -549,6 +659,10 @@ def _run_claude_code_stream(cmd: list[str], prompt: str, *, timeout_s: int,
             except queue.Empty:
                 raise subprocess.TimeoutExpired(cmd, timeout_s) from None
             if line is None:
+                if name == "stdout":
+                    # Phases close at end-of-stream: anything after this point
+                    # (process exit, thread joins) is shutdown, not model time.
+                    stream_end = time.monotonic()
                 open_streams -= 1
                 continue
             if name != "stdout":
@@ -563,6 +677,7 @@ def _run_claude_code_stream(cmd: list[str], prompt: str, *, timeout_s: int,
                 continue
             if isinstance(payload, dict):
                 _observe_claude_stream_event(payload, timer, time.monotonic())
+                lookups += _docs_lookups(payload)
                 if payload.get("type") == "result":
                     result = payload
         remaining = max(0.001, deadline - time.time())
@@ -575,10 +690,10 @@ def _run_claude_code_stream(cmd: list[str], prompt: str, *, timeout_s: int,
         for thread in threads:
             thread.join(timeout=1)
 
-    thinking_time = timer.finish(time.monotonic())
+    timings = timer.finish(stream_end if stream_end is not None else time.monotonic())
     completed = subprocess.CompletedProcess(
-        cmd, returncode, "".join(stdout_lines), "".join(stderr_lines))
-    return result, thinking_time, completed
+        cmd, returncode, "".join(stdout_tail), "".join(stderr_lines))
+    return result, timings, completed, lookups
 
 
 def _call_claude_code(
@@ -591,20 +706,29 @@ def _call_claude_code(
     max_retries: int,
     backoff_base_s: float,
     measure_thinking: bool = False,
+    docs: str | None = None,
 ) -> CallResult:
     """One model call through `claude -p` (prompt on stdin, lean flags, a fresh
     empty working dir, credential env vars stripped). Never raises.
 
     `measure_thinking` opts into stream-json/partial-message instrumentation;
     the default JSON transport remains unchanged for existing evaluations.
+    `docs` (a DOCS_SERVERS key) hands the model that docs MCP server and only
+    its tools; `--strict-mcp-config` keeps every other MCP server out. It
+    streams too, so each lookup can be recorded.
     """
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
              "cache_write_tokens": 0, "total_tokens": 0}
+    system = f"{SYSTEM_PROMPT}\n\n{DOCS_SERVERS[docs]['hint']}" if docs else SYSTEM_PROMPT
     cmd = ["claude", "-p", "--model", model_slug, *CLAUDE_CODE_FLAGS,
-           "--system-prompt", SYSTEM_PROMPT]
-    if measure_thinking:
+           "--system-prompt", system]
+    stream = measure_thinking or bool(docs)
+    if stream:
         cmd[cmd.index("--output-format") + 1] = "stream-json"
         cmd += ["--verbose", "--include-partial-messages"]
+    if docs:
+        cmd += ["--allowedTools",
+                ",".join(f"mcp__{docs}__{tool}" for tool in DOCS_SERVERS[docs]["tools"])]
     if effort:
         cmd += ["--effort", effort]
     env = _claude_code_env(max_tokens)
@@ -614,19 +738,31 @@ def _call_claude_code(
     for attempt in range(1, max_retries + 1):
         retryable = False
         thinking_time: float | None = None
+        execution_time: float | None = None
+        lookups: list[dict[str, Any]] | None = None
         t0 = time.time()
         try:
             with tempfile.TemporaryDirectory(prefix="gate1-cc-") as cwd:
-                if measure_thinking:
-                    out, thinking_time, proc = _run_claude_code_stream(
-                        cmd, prompt, timeout_s=timeout_s, cwd=cwd, env=env)
+                if stream:
+                    call_cmd = (cmd + ["--mcp-config", str(_write_mcp_config(docs, Path(cwd)))]
+                                if docs else cmd)
+                    out, timings, proc, lookups = _run_claude_code_stream(
+                        call_cmd, prompt, timeout_s=timeout_s, cwd=cwd, env=env)
+                    if measure_thinking:
+                        thinking_time, execution_time = timings
+                    if not docs:
+                        lookups = None
                 else:
                     proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
                                           timeout=timeout_s, cwd=cwd, env=env)
                     out = None
             latency = time.time() - t0
         except subprocess.TimeoutExpired:
-            last_err, retryable = f"claude -p timed out after {timeout_s}s", True
+            # In stream mode timeout_s is an inactivity (between-events)
+            # timeout, not a whole-call deadline — say which one tripped.
+            last_err = (f"claude -p stalled: no output for {timeout_s}s" if stream
+                        else f"claude -p timed out after {timeout_s}s")
+            retryable = True
         except FileNotFoundError:
             return CallResult(usage, attempt, 0.0, "", None,
                               "Claude Code CLI `claude` not found on PATH")
@@ -634,7 +770,7 @@ def _call_claude_code(
             last_err = f"claude -p failed to start: {exc}"
         else:
             try:
-                if not measure_thinking:
+                if not stream:
                     out = json.loads(proc.stdout)
                 if not isinstance(out, dict):
                     raise ValueError("not a JSON object")
@@ -659,7 +795,8 @@ def _call_claude_code(
                         f"output limit ({max_tokens} tokens) over {turns or '?'} requests",
                         provider="claude-code", cost_estimate_usd=estimate,
                         reasoning_tokens=thinking, num_turns=turns, duration_api_ms=api_ms,
-                        thinking_time_s=thinking_time)
+                        thinking_time_s=thinking_time, execution_time_s=execution_time,
+                        docs_calls=lookups)
                 if out.get("is_error"):
                     status = out.get("api_error_status")
                     msg = f"claude -p error (api_error_status={status}): {result[:300]}"
@@ -679,7 +816,7 @@ def _call_claude_code(
                     if not ok_model:
                         # never score a different model's answer
                         text, err = "", f"served by {served}, asked for {model_slug}"
-                    elif turns is not None and turns > 1:
+                    elif turns is not None and turns > 1 and not docs:
                         # With no tools, more than one request means the answer hit
                         # the output limit and Claude Code continued it; `result` is
                         # only the last request's text, a fragment. Cut off at the
@@ -696,7 +833,8 @@ def _call_claude_code(
                     return CallResult(usage, attempt, latency, text, finish_reason, err,
                                       provider="claude-code", cost_estimate_usd=estimate,
                                       reasoning_tokens=thinking, num_turns=turns,
-                                      duration_api_ms=api_ms, thinking_time_s=thinking_time)
+                                      duration_api_ms=api_ms, thinking_time_s=thinking_time,
+                                      execution_time_s=execution_time, docs_calls=lookups)
         if not retryable or attempt >= max_retries:
             break
         time.sleep(min(backoff_base_s * (2 ** (attempt - 1)), 60.0))
@@ -720,6 +858,7 @@ def call_model(
     session: str | None = None,
     extra_params: dict[str, Any] | None = None,
     measure_thinking: bool = False,
+    docs: str | None = None,
 ) -> CallResult:
     """Call one model and return a CallResult.
 
@@ -760,7 +899,11 @@ def call_model(
         return _call_claude_code(
             model_slug, prompt, max_tokens=max_tokens, timeout_s=timeout_s,
             effort=_claude_code_effort(reasoning), max_retries=max_retries,
-            backoff_base_s=backoff_base_s, measure_thinking=measure_thinking)
+            backoff_base_s=backoff_base_s, measure_thinking=measure_thinking, docs=docs)
+    if docs:
+        # run_pair refuses these before any call; never silently run without docs
+        return CallResult(usage, 0, 0.0, "", None,
+                          f"--docs {docs} supports Claude Code models only")
 
     try:
         import litellm  # lazy import
@@ -833,6 +976,7 @@ def call_model(
     last_err: str | None = None
     for attempt in range(1, max_retries + 1):
         thinking_time: float | None = None
+        execution_time: float | None = None
         t0 = time.time()
         try:
             # max_retries=0 everywhere: litellm's underlying OpenAI client
@@ -873,7 +1017,7 @@ def call_model(
                         _observe_stream_chunk(chunk, timer, time.monotonic())
                     chunks.append(chunk)
                 if measure_thinking:
-                    thinking_time = timer.finish(time.monotonic())
+                    thinking_time, execution_time = timer.finish(time.monotonic())
                 resp = litellm.stream_chunk_builder(chunks, messages=messages)
                 if resp is None:
                     return CallResult(usage, attempt, time.time() - t0, "", None,
@@ -922,6 +1066,7 @@ def call_model(
                 billed_cost_usd=_extract_billed_cost(resp),
                 reasoning_tokens=_extract_reasoning_tokens(resp),
                 thinking_time_s=thinking_time,
+                execution_time_s=execution_time,
             )
 
         except Exception as exc:  # noqa: BLE001 - we intentionally catch all
@@ -947,6 +1092,59 @@ def call_model(
 # --------------------------------------------------------------------------- #
 # Run one (model × case)                                                       #
 # --------------------------------------------------------------------------- #
+def effort_override_unsupported(cfg: Config, model: ModelRef,
+                                level: str | None = None) -> str | None:
+    """Why `--effort` cannot be applied to this model, or None if it can.
+
+    Claude Code takes `--effort`; OpenCode Go's chat route takes
+    `reasoning_effort`. OpenRouter is out of scope for the timing work
+    (docs/METRICS_PLAN.md), and Go's responses / messages routes have no
+    verified effort control (messages ignores thinking controls, probed
+    2026-10-15) — refusing beats a sweep whose levels silently do nothing."""
+    api = cfg.api_for(model)
+    if api is None:
+        return f"{model.name}: OpenRouter models are out of scope for --effort"
+    if api.family not in ("claude-code", "chat"):
+        return (f"{model.name}: the {api.family!r} route ({api.id}) has no verified "
+                "effort control for --effort")
+    if api.family == "chat" and level and level not in GO_EFFORT_LEVELS:
+        return (f"{model.name}: --effort {level} is Claude Code only; {api.id}'s "
+                f"reasoning_effort takes {', '.join(GO_EFFORT_LEVELS)}")
+    return None
+
+
+def call_prefs(cfg: Config, pair_id: str, model: ModelRef,
+               effort_override: str | None = None,
+               ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """(provider_prefs, reasoning_prefs, extra_params) for one model call, so a
+    run and a later repair round of it (repair.py) send the same thing.
+
+    OpenRouter provider pinning / reasoning prefs only apply to OpenRouter
+    models; a gateway like OpenCode Go is already one provider. The Claude
+    Code CLI takes the suite's thinking effort as `--effort`. An effort
+    override (runner.py --effort) replaces both.
+    """
+    api = cfg.api_for(model)
+    provider_prefs = cfg.provider_for(pair_id) if api is None else None
+    reasoning_prefs = cfg.reasoning if api is None else None
+    if api is not None and api.family == "claude-code":
+        effort = _claude_code_effort(cfg.reasoning) or cfg.effort
+        reasoning_prefs = {"effort": effort} if effort else None
+    elif api is not None:
+        effort = (model.params or {}).get("reasoning_effort")
+        reasoning_prefs = {"effort": effort} if effort else None
+    extra_params = model.params
+    if effort_override:
+        why = effort_override_unsupported(cfg, model, effort_override)
+        if why:
+            raise ValueError(why)
+        reasoning_prefs = {"effort": effort_override}
+        if api.family != "claude-code":
+            # a copy: the override must never leak into the loaded models.yaml
+            extra_params = {**(model.params or {}), "reasoning_effort": effort_override}
+    return provider_prefs, reasoning_prefs, extra_params
+
+
 def run_case(
     cfg: Config,
     pair_id: str,
@@ -957,21 +1155,14 @@ def run_case(
     dry_run: bool = False,
     rep: int = 0,
     run_id: str | None = None,
+    effort_override: str | None = None,
+    docs: str | None = None,
 ) -> RunResult:
     run_id = run_id or new_run_id()
     prompt = build_prompt(case_id)
     api = cfg.api_for(model)
-    # OpenRouter provider pinning / reasoning prefs only apply to OpenRouter
-    # models; a gateway like OpenCode Go is already one provider. The Claude
-    # Code CLI takes the suite's thinking effort as `--effort`.
-    provider_prefs = cfg.provider_for(pair_id) if api is None else None
-    reasoning_prefs = cfg.reasoning if api is None else None
-    if api is not None and api.family == "claude-code":
-        effort = _claude_code_effort(cfg.reasoning)
-        reasoning_prefs = {"effort": effort} if effort else None
-    elif api is not None:
-        effort = (model.params or {}).get("reasoning_effort")
-        reasoning_prefs = {"effort": effort} if effort else None
+    provider_prefs, reasoning_prefs, extra_params = call_prefs(cfg, pair_id, model,
+                                                                effort_override)
     call = call_model(
         model.id,
         prompt,
@@ -985,8 +1176,9 @@ def run_case(
         reasoning=reasoning_prefs,
         api=api,
         session=run_id,
-        extra_params=model.params,
+        extra_params=extra_params,
         measure_thinking=cfg.thinking_time,
+        docs=docs,
     )
     if call.stop_run:
         raise UsageLimitReached(call.stop_run)
@@ -1005,6 +1197,8 @@ def run_case(
         latency_s=round(latency, 4),
         thinking_time_s=(round(call.thinking_time_s, 4)
                          if call.thinking_time_s is not None else None),
+        execution_time_s=(round(call.execution_time_s, 4)
+                          if call.execution_time_s is not None else None),
         attempts=attempts,
         prompt=prompt,
         output_text=text,
@@ -1014,6 +1208,9 @@ def run_case(
         created_at=time.time(),
         provider_requested=provider_prefs,
         reasoning_requested=reasoning_prefs,
+        effort_override=effort_override,
+        docs_tool=docs,
+        docs_calls=call.docs_calls,
         reasoning_tokens=call.reasoning_tokens,
         provider=call.provider,
         billed_cost_usd=call.billed_cost_usd,
@@ -1034,6 +1231,9 @@ def run_pair(
     dry_run: bool = False,
     repeats: int = 1,
     run_id: str | None = None,
+    role: str | None = None,
+    effort_override: str | None = None,
+    docs: str | None = None,
 ) -> list[RunResult]:
     """Run every (case, model, repeat) of a pair. All files share ONE run id,
     taken once at the start, so a run that crosses midnight UTC stays whole.
@@ -1045,18 +1245,31 @@ def run_pair(
     """
     pair = cfg.get_pair(pair_id)
     run_id = run_id or new_run_id()
+    sides = [(m, r) for m, r in ((pair.current, "current"), (pair.target, "target"))
+             if role in (None, r)]
+    if effort_override:
+        # refuse before any call, so a sweep never half-runs
+        for model, _ in sides:
+            if why := effort_override_unsupported(cfg, model, effort_override):
+                raise ValueError(why)
+    if docs:
+        for model, _ in sides:
+            api = cfg.api_for(model)
+            if api is None or api.family != "claude-code":
+                raise ValueError(f"{model.name}: --docs {docs} supports Claude Code models only "
+                                 "for now (OpenCode Go and OpenRouter need a tool-calling loop)")
     if not dry_run and any((api := cfg.api_for(m)) is not None and api.family == "claude-code"
-                           for m in (pair.current, pair.target)):
+                           for m, _ in sides):
         claude_code_preflight()
     results: list[RunResult] = []
     for case_id in cfg.selected_cases(case):
-        for model, role in ((pair.current, "current"), (pair.target, "target")):
+        for model, side in sides:
             for rep in range(repeats):
-                res = run_case(cfg, pair_id, case_id, model, role, dry_run=dry_run, rep=rep,
-                               run_id=run_id)
+                res = run_case(cfg, pair_id, case_id, model, side, dry_run=dry_run, rep=rep,
+                               run_id=run_id, effort_override=effort_override, docs=docs)
                 status = "OK" if res.ok else f"FAIL ({res.error})"
                 tag = f" [rep {rep+1}/{repeats}]" if repeats > 1 else ""
-                print(f"[{pair_id}] {role:7s} {model.name:20s} {case_id:26s} "
+                print(f"[{pair_id}] {side:7s} {model.name:20s} {case_id:26s} "
                       f"{res.latency_s:7.2f}s{tag}  {status}", file=sys.stderr)
                 if res.ok:
                     results.append(res)
@@ -1078,10 +1291,34 @@ def main(argv: list[str] | None = None) -> int:
                     help="run each (model, case) N times to capture latency/cost variance")
     ap.add_argument("--dry-run", action="store_true",
                     help="build prompts only, no network calls (CI-safe)")
+    ap.add_argument("--measure-thinking", action="store_true",
+                    help="record thinking/answer stream phases for this run "
+                         "(models.yaml defaults.thinking_time, without editing it)")
+    ap.add_argument("--role", choices=("current", "target"),
+                    help="run one side of the pair only (default: both)")
+    ap.add_argument("--docs", choices=sorted(DOCS_SERVERS),
+                    help="docs-assisted run: hand Claude Code models this docs MCP server "
+                         "(e.g. context7, up-to-date library docs). Recorded per call; never "
+                         "the scorecard or the leaderboard")
+    ap.add_argument("--effort", metavar="LEVELS",
+                    help="thinking-effort sweep, e.g. low,medium,high,xhigh,max: run once "
+                         "per level, each level in its own run id (see report.py "
+                         "--by-effort). Claude Code takes all five; OpenCode Go chat "
+                         "takes low/medium/high")
     args = ap.parse_args(argv)
+
+    efforts: list[str | None] = [None]
+    if args.effort:
+        efforts = [e.strip() for e in args.effort.split(",") if e.strip()]
+        bad = [e for e in efforts if e not in EFFORT_LEVELS]
+        if bad or not efforts or len(set(efforts)) != len(efforts):
+            ap.error(f"--effort takes distinct levels from {', '.join(EFFORT_LEVELS)}; "
+                     f"got {args.effort!r}")
 
     load_env()
     cfg = load_config(suite=args.suite)
+    if args.measure_thinking:
+        cfg.defaults["thinking_time"] = True
 
     if args.all_pairs:
         pair_ids = [p.id for p in cfg.pairs]
@@ -1090,20 +1327,28 @@ def main(argv: list[str] | None = None) -> int:
     else:
         ap.error("pass --pair <id> or --all-pairs")
 
-    run_id = new_run_id()
-    print(f"run id: {run_id}  suite: {cfg.suite}", file=sys.stderr)
-    for pid in pair_ids:
-        try:
-            run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats,
-                     run_id=run_id)
-        except ClaudeCodeNotReady as exc:
-            print(f"[{pid}] not run: {exc}", file=sys.stderr)
-            return 2
-        except UsageLimitReached as exc:
-            print(f"[{pid}] stopped: {exc}. Runs written so far are kept (run id {run_id}); "
-                  "this is a partial run, not a scorecard. Re-run after the limit resets.",
-                  file=sys.stderr)
-            return 3
+    used: set[str] = set()
+    for effort in efforts:
+        # one run id per level: a sweep must never mix levels inside one run
+        run_id = new_run_id()
+        while run_id in used:
+            time.sleep(0.25)
+            run_id = new_run_id()
+        used.add(run_id)
+        note = f"  effort: {effort}" if effort else ""
+        print(f"run id: {run_id}  suite: {cfg.suite}{note}", file=sys.stderr)
+        for pid in pair_ids:
+            try:
+                run_pair(cfg, pid, case=args.case, dry_run=args.dry_run, repeats=args.repeats,
+                         run_id=run_id, role=args.role, effort_override=effort, docs=args.docs)
+            except (ClaudeCodeNotReady, ValueError) as exc:
+                print(f"[{pid}] not run: {exc}", file=sys.stderr)
+                return 2
+            except UsageLimitReached as exc:
+                print(f"[{pid}] stopped: {exc}. Runs written so far are kept (run id {run_id}); "
+                      "this is a partial run, not a scorecard. Re-run after the limit resets.",
+                      file=sys.stderr)
+                return 3
     return 0
 
 

@@ -360,3 +360,187 @@ def test_report_picks_latest_complete_run(tmp_path, monkeypatch):
     assert skipped == ["20261009T015807Z"]
     assert report.missing_cases(CONFIG, common.load_runs("opus-4.8-vs-5.5", run="20261009T015807Z")) \
         == sorted(set(CONFIG.cases) - {"r4_schema_load_optimize"})
+
+
+# =========================================================================== #
+# Descriptive timing metrics (docs/METRICS_PLAN.md): TTFS, Pass@T,            #
+# Execution/Thinking ratio. They never feed the weighted overall score.      #
+# =========================================================================== #
+import report
+from report import ModelAgg, aggregate, reasoning_level
+
+PAIR = "glm-5.2-vs-5.3"
+
+
+def _timed_rec(*, ok=True, latency=10.0, case="r3_oracle_to_postgres", error=None,
+         thinking=None, execution=None, slug="m", role="target"):
+    rec = {"case_id": case, "role": role, "model_slug": slug, "model_name": slug,
+           "ok": ok, "error": error, "input_tokens": 10, "output_tokens": 10,
+           "cache_read_tokens": 0, "cache_write_tokens": 0, "total_tokens": 20,
+           "latency_s": latency, "output_text": "x", "billed_cost_usd": None,
+           "provider": "opencode-go"}
+    if thinking is not None:
+        rec["thinking_time_s"] = thinking
+    if execution is not None:
+        rec["execution_time_s"] = execution
+    return rec
+
+
+def _agg(recs) -> ModelAgg:
+    return aggregate(recs, score=False)[("m", "target")]
+
+
+# --------------------------------------------------------------------------- #
+# reasoning_level (per-call effort label)                                      #
+# --------------------------------------------------------------------------- #
+def test_reasoning_level_reads_effort():
+    assert reasoning_level({"reasoning_requested": {"effort": "medium"}}) == "medium"
+
+
+def test_reasoning_level_reads_budget_dicts():
+    """OpenRouter suites request thinking as {max_tokens: N}; that is a
+    recorded request, not 'not recorded'."""
+    assert reasoning_level({"reasoning_requested": {"max_tokens": 16000}}) == "max_tokens=16000"
+
+
+def test_reasoning_level_missing_is_not_recorded():
+    assert reasoning_level({}) == "not recorded"
+    assert reasoning_level({"reasoning_requested": None}) == "not recorded"
+
+
+# --------------------------------------------------------------------------- #
+# TTFS                                                                         #
+# --------------------------------------------------------------------------- #
+def test_ttfs_averages_passing_attempts_only():
+    a = _agg([_timed_rec(ok=True, latency=10.0), _timed_rec(ok=True, latency=30.0),
+              _timed_rec(ok=False, latency=500.0, error="empty completion")])
+    assert a.mean_ttfs == pytest.approx(20.0)
+
+
+def test_ttfs_is_none_without_a_pass():
+    a = _agg([_timed_rec(ok=False, latency=5.0, error="empty completion")])
+    assert a.mean_ttfs is None
+
+
+def test_ttfs_excludes_infra_errors():
+    a = _agg([_timed_rec(ok=True, latency=10.0),
+              _timed_rec(ok=False, latency=999.0, error="Timeout: litellm.Timeout")])
+    assert a.runs == 1 and a.mean_ttfs == pytest.approx(10.0)
+
+
+# --------------------------------------------------------------------------- #
+# Pass@T                                                                       #
+# --------------------------------------------------------------------------- #
+def test_pass_at_counts_passes_within_budget_over_all_scored():
+    a = _agg([_timed_rec(ok=True, latency=10.0), _timed_rec(ok=True, latency=100.0),
+              _timed_rec(ok=False, latency=5.0, error="empty completion")])
+    assert a.pass_at(30.0) == pytest.approx(1 / 3)
+
+
+def test_pass_at_boundary_is_inclusive():
+    a = _agg([_timed_rec(ok=True, latency=30.0)])
+    assert a.pass_at(30.0) == pytest.approx(1.0)
+
+
+def test_pass_at_keeps_slow_passes_in_denominator_only():
+    a = _agg([_timed_rec(ok=True, latency=31.0)])
+    assert a.pass_at(30.0) == 0.0
+
+
+def test_pass_at_excludes_infra_errors():
+    a = _agg([_timed_rec(ok=True, latency=10.0),
+              _timed_rec(ok=False, latency=10.0, error="Timeout: litellm.Timeout")])
+    assert a.pass_at(30.0) == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------- #
+# Execution / Thinking ratio                                                   #
+# --------------------------------------------------------------------------- #
+def test_ratio_is_sum_over_sum_of_paired_measurements():
+    a = _agg([_timed_rec(thinking=10.0, execution=5.0), _timed_rec(thinking=2.0, execution=4.0),
+              _timed_rec(thinking=7.0)])          # unpaired: ignored by the ratio
+    assert a.execution_thinking_ratio == pytest.approx(9.0 / 12.0)
+    assert a.paired_timing_runs == 2
+
+
+def test_ratio_is_none_without_pairs_or_with_zero_thinking():
+    assert _agg([_timed_rec()]).execution_thinking_ratio is None
+    assert _agg([_timed_rec(thinking=0.0, execution=3.0)]).execution_thinking_ratio is None
+
+
+def test_missing_measurement_is_never_zero():
+    a = _agg([_timed_rec(thinking=True, execution=5.0)])   # bool is not a measurement
+    assert a.thinking_time_runs == 0 and a.paired_timing_runs == 0
+
+
+# --------------------------------------------------------------------------- #
+# budgets configuration                                                        #
+# --------------------------------------------------------------------------- #
+def test_default_time_budgets():
+    cfg = load_config()
+    assert cfg.time_budgets_s == [30, 60, 120]
+
+
+def test_real_suite_time_budgets():
+    cfg = load_config(suite="real")
+    assert cfg.time_budgets_s == [300, 900, 1800]
+
+
+@pytest.mark.parametrize("bad", [[0, 10], [-5], [60, 30], [30, 30, 60], ["x"]])
+def test_invalid_time_budgets_fail_loudly(bad):
+    cfg = load_config()
+    cfg.defaults["time_budgets_s"] = bad
+    with pytest.raises((ValueError, TypeError)):
+        _ = cfg.time_budgets_s
+
+
+# --------------------------------------------------------------------------- #
+# rendering                                                                    #
+# --------------------------------------------------------------------------- #
+def _pair_runs(cfg):
+    pair = cfg.get_pair(PAIR)
+    return [
+        _timed_rec(slug=pair.current.id, role="current", latency=10.0,
+             thinking=4.0, execution=2.0),
+        _timed_rec(slug=pair.target.id, role="target", latency=40.0),
+    ]
+
+
+def test_report_renders_descriptive_metric_rows():
+    cfg = load_config()
+    runs = _pair_runs(cfg)
+    aggs = aggregate(runs, score=False)
+    md = report.render_pair(cfg, PAIR, aggs, runs, score=False)
+    assert "| TTFS (mean successful-attempt latency, s) |" in md
+    assert "| Pass@30s |" in md and "| Pass@60s |" in md and "| Pass@120s |" in md
+    assert "| Execution / thinking time ratio |" in md
+    # target has no timing measurements: n/a, never zero
+    assert "n/a" in md
+
+
+def test_report_cli_budget_override():
+    cfg = load_config()
+    runs = _pair_runs(cfg)
+    aggs = aggregate(runs, score=False)
+    md = report.render_pair(cfg, PAIR, aggs, runs, score=False, time_budgets=[15.0])
+    assert "| Pass@15s |" in md and "| Pass@30s |" not in md
+
+
+def test_no_score_notes_unverified_timing_metrics():
+    cfg = load_config()
+    runs = _pair_runs(cfg)
+    aggs = aggregate(runs, score=False)
+    md = report.render_pair(cfg, PAIR, aggs, runs, score=False)
+    assert "TTFS and Pass@T reflect the runner completion flag" in md
+
+
+def test_descriptive_metrics_leave_overall_score_unchanged():
+    cfg = load_config()
+    runs = _pair_runs(cfg)
+    aggs = aggregate(runs, score=False)
+    pair = cfg.get_pair(PAIR)
+    ov = report.overall_score(aggs[(pair.current.id, "current")],
+                              aggs[(pair.target.id, "target")])
+    assert ov is not None
+    assert ov.quality == pytest.approx(100.0)   # 1/1 vs 1/1
+    assert ov.time == pytest.approx(50.0)       # 4x slower, clamped at 50

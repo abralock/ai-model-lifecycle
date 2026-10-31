@@ -212,6 +212,119 @@ def test_go_stream_records_thinking_time_and_effort(tmp_path, monkeypatch, fake_
     assert saved["reasoning_requested"] == {"effort": "low"}
 
 
+def test_go_stream_records_execution_time(tmp_path, monkeypatch, fake_litellm):
+    """Execution time is the streamed visible-answer phase, measured — never
+    derived as latency minus thinking (that difference contains startup and
+    network overhead)."""
+    def chunk(*, reasoning="", content=""):
+        delta = types.SimpleNamespace(reasoning_content=reasoning or None,
+                                      content=content or None,
+                                      thinking_blocks=None, reasoning_items=None)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=delta)])
+
+    fake_litellm.chunks = [
+        chunk(reasoning="plan"), chunk(reasoning=" more"),
+        chunk(content="answer"), types.SimpleNamespace(choices=[]),
+    ]
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    times = iter((1.0, 3.0, 7.0, 8.0, 9.0))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(times))
+    cfg = _cfg(tmp_path, GO_YAML + "\ndefaults:\n  thinking_time: true\n")
+    pair = cfg.get_pair("g")
+    res = runner.run_case(cfg, "g", "r3_oracle_to_postgres", pair.target, "target",
+                          run_id="20261030T000000Z")
+
+    assert res.thinking_time_s == pytest.approx(6.0)
+    assert res.execution_time_s == pytest.approx(2.0)
+    saved = json.loads(next(tmp_path.rglob("*.json")).read_text())
+    assert saved["execution_time_s"] == pytest.approx(2.0)
+
+
+def _phase_chunk(*, reasoning="", content=""):
+    delta = types.SimpleNamespace(reasoning_content=reasoning or None,
+                                  content=content or None,
+                                  thinking_blocks=None, reasoning_items=None)
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=delta)])
+
+
+def _run_instrumented(tmp_path, monkeypatch, fake_litellm, chunks, times):
+    fake_litellm.chunks = chunks
+    monkeypatch.setattr(common, "RUNS_DIR", tmp_path)
+    clock = iter(times)
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(clock))
+    cfg = _cfg(tmp_path, GO_YAML + "\ndefaults:\n  thinking_time: true\n")
+    pair = cfg.get_pair("g")
+    return runner.run_case(cfg, "g", "r3_oracle_to_postgres", pair.target, "target",
+                           run_id="20261030T000000Z")
+
+
+def test_go_thinking_only_stream_spent_zero_seconds_answering(tmp_path, monkeypatch,
+                                                              fake_litellm):
+    """Inside an observed stream an absent phase is a measured 0 s."""
+    res = _run_instrumented(tmp_path, monkeypatch, fake_litellm,
+                            [_phase_chunk(reasoning="plan"), _phase_chunk(reasoning="...")],
+                            (1.0, 3.0, 9.0))
+    assert res.thinking_time_s == pytest.approx(8.0)
+    assert res.execution_time_s == 0.0
+
+
+def test_go_answer_without_thinking_records_zero_thinking(tmp_path, monkeypatch, fake_litellm):
+    """A model that answers straight away (common at low effort) thought for
+    0 s — a measurement, not a missing value."""
+    res = _run_instrumented(tmp_path, monkeypatch, fake_litellm,
+                            [_phase_chunk(content="a"), _phase_chunk(content="b")],
+                            (1.0, 2.0, 5.0))
+    assert res.thinking_time_s == 0.0
+    assert res.execution_time_s == pytest.approx(4.0)
+
+
+def test_go_stream_without_classified_events_is_unmeasured(tmp_path, monkeypatch,
+                                                           fake_litellm):
+    """Only usage chunks, no reasoning or content: no measurement at all."""
+    res = _run_instrumented(tmp_path, monkeypatch, fake_litellm,
+                            [types.SimpleNamespace(choices=[])], (1.0, 2.0))
+    assert res.thinking_time_s is None and res.execution_time_s is None
+
+
+def test_observe_stream_chunk_handles_interleaved_phases():
+    """Reasoning resumed after an answer chunk reopens the thinking phase."""
+    timer = runner._ThinkingTimer()
+    timer.reasoning(1.0)   # think 1→4
+    timer.answer(4.0)      # answer 4→6
+    timer.reasoning(6.0)   # think 6→7
+    timer.answer(7.0)      # answer 7→9
+    thinking, execution = timer.finish(9.0)
+    assert thinking == pytest.approx(4.0)
+    assert execution == pytest.approx(4.0)
+
+
+def test_observe_stream_chunk_probes_attr_deltas_without_serialization():
+    """Pydantic-style deltas are probed with getattr, not a per-token
+    model_dump() serialization in the hot streaming loop."""
+    class _Delta:
+        reasoning_content = "x"
+        content = None
+
+        def model_dump(self):
+            raise AssertionError("model_dump must not be called per chunk")
+
+    class _Answer:
+        reasoning_content = None
+        content = "hi"
+
+        def model_dump(self):
+            raise AssertionError("model_dump must not be called per chunk")
+
+    timer = runner._ThinkingTimer()
+    runner._observe_stream_chunk(
+        types.SimpleNamespace(choices=[types.SimpleNamespace(delta=_Delta())]), timer, 1.0)
+    runner._observe_stream_chunk(
+        types.SimpleNamespace(choices=[types.SimpleNamespace(delta=_Answer())]), timer, 3.0)
+    thinking, execution = timer.finish(4.0)
+    assert thinking == pytest.approx(2.0)
+    assert execution == pytest.approx(1.0)
+
+
 def test_go_call_sends_no_client_retries(tmp_path, monkeypatch, fake_litellm):
     """litellm's underlying OpenAI client retries timeouts twice by default
     (3 hidden attempts per call, measured 2026-10-26: a 45 s timeout raised

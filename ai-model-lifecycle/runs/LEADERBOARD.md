@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-10-31T15:56:10+00:00 · live scoring: on (score cache)  
+> Generated: 2026-10-31T16:01:39+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -10,13 +10,13 @@ The model works on a copy of the project in a sandbox with Claude Code, the way 
 
 ## Ranking
 
-Models that tried every task rank first. Time is the agent's wall-clock time per attempt; cost is Claude Code's estimate at API list prices.
+Models that tried every task rank first, then by pass rate; equal pass rates are ranked by time, then cost. Time is the agent's wall-clock time and cost Claude Code's estimate at API list prices; the ranking adds up each task's mean attempt, i.e. one pass through the tasks tried.
 
-| # | Model | Thinking level | Sanity passed | Real passed | Overall pass rate | Tasks tried |
-|---:|---|---|---:|---:|---:|---:|
-| 1 | Claude Haiku 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 |
-| 2 | Claude Opus 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 |
-| 3 | Claude Sonnet 5.5 (CC) | medium | 13/13 | 2/2 | 100% (15/15) | 6/6 |
+| # | Model | Thinking level | Sanity passed | Real passed | Overall pass rate | Tasks tried | Time, all tasks (min) | Cost, all tasks |
+|---:|---|---|---:|---:|---:|---:|---:|---:|
+| 1 | Claude Opus 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 | 33.9 | $7.13 |
+| 2 | Claude Sonnet 5.5 (CC) | medium | 13/13 | 2/2 | 100% (15/15) | 6/6 | 37.4 | $2.59 |
+| 3 | Claude Haiku 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 | 58.8 | $3.35 |
 
 ### r1_springboot2to3 — Spring Boot 2 → 3 (small app)
 

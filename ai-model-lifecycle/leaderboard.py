@@ -184,6 +184,16 @@ class AgenticRow:
     def rate(self) -> float:
         return self.passes / self.attempts if self.attempts else 0.0
 
+    @property
+    def time_s(self) -> float:
+        """Sum over tasks of the mean attempt time: one full pass through the tasks."""
+        return sum(t.mean_time_s for t in self.by_case.values())
+
+    @property
+    def cost_usd(self) -> float:
+        """Sum over tasks of the mean attempt cost."""
+        return sum(t.cost_usd / t.attempts for t in self.by_case.values())
+
 
 def agentic_rows(cases: list[str], *, score: bool, scorer=None,
                  since: str | None = None) -> list[AgenticRow]:
@@ -227,7 +237,9 @@ def agentic_rows(cases: list[str], *, score: bool, scorer=None,
                     task.timed += 1
         if row.by_case:                 # only infra errors: nothing to rank
             rows.append(row)
-    rows.sort(key=lambda r: (-len(r.by_case), -r.rate, r.name))
+    # equal pass rates (e.g. every model at 100%) are decided by time, then
+    # cost, never by name
+    rows.sort(key=lambda r: (-len(r.by_case), -r.rate, r.time_s, r.cost_usd, r.name))
     return rows
 
 
@@ -513,11 +525,13 @@ def render_agentic(board: Board) -> list[str]:
              "## Ranking", ""]
     if not board.agentic:
         return lines + ["_No agentic runs yet (`python agentic.py --pair <pair> --role current`)._", ""]
-    lines += ["Models that tried every task rank first. Time is the agent's wall-clock time "
-              "per attempt; cost is Claude Code's estimate at API list prices.", "",
+    lines += ["Models that tried every task rank first, then by pass rate; equal pass rates "
+              "are ranked by time, then cost. Time is the agent's wall-clock time and cost "
+              "Claude Code's estimate at API list prices; the ranking adds up each task's mean "
+              "attempt, i.e. one pass through the tasks tried.", "",
               "| # | Model | Thinking level | Sanity passed | Real passed | Overall pass rate | "
-              "Tasks tried |",
-              "|---:|---|---|---:|---:|---:|---:|"]
+              "Tasks tried | Time, all tasks (min) | Cost, all tasks |",
+              "|---:|---|---|---:|---:|---:|---:|---:|---:|"]
     for i, row in enumerate(board.agentic, 1):
         suites = []
         for suite in SUITES:
@@ -526,7 +540,8 @@ def render_agentic(board: Board) -> list[str]:
                           if got else "—")
         tried = f"{len(row.by_case)}/{len(cases)}"
         lines.append(f"| {i} | {row.name} | {row.level} | {suites[0]} | {suites[1]} | "
-                     f"{row.rate * 100:.0f}% ({row.passes}/{row.attempts}) | {tried} |")
+                     f"{row.rate * 100:.0f}% ({row.passes}/{row.attempts}) | {tried} | "
+                     f"{row.time_s / 60:.1f} | ${row.cost_usd:.2f} |")
     lines.append("")
     for suite in SUITES:
         budgets = board.agentic_budgets.get(suite, [])
@@ -534,7 +549,8 @@ def render_agentic(board: Board) -> list[str]:
             title = CASE_TITLES.get(case)
             lines += [f"### {case}" + (f" — {title}" if title else ""), ""]
             ranked = sorted(((r, r.by_case[case]) for r in board.agentic if case in r.by_case),
-                            key=lambda t: (-t[1].rate, t[1].mean_time_s, t[0].name))
+                            key=lambda t: (-t[1].rate, t[1].mean_time_s,
+                                           t[1].cost_usd / t[1].attempts, t[0].name))
             if not ranked:
                 lines += ["_No agentic results for this task yet._", ""]
                 continue

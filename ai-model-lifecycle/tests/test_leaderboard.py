@@ -556,3 +556,22 @@ def test_agentic_metrics_are_na_without_a_pass_or_a_measurement(runs):
     row = next(line for line in md.split(f"### {SANITY.cases[0]}")[1].splitlines()
                if "| haiku |" in line)
     assert "| 0/1 | 0% | 2.0 | n/a | 0% | 0% | 0% | n/a |" in row
+
+
+def test_equal_pass_rates_rank_by_time_then_cost_not_name(runs):
+    """2026-11-01: with every model at 100%, the ranking fell back to the
+    alphabet. Time decides, then cost."""
+    for case in [*SANITY.cases, *REAL.cases]:
+        _agentic("p", "20261101T000000Z", "aaa-slow", case, minutes=30, cost=1.0)
+        _agentic("p", "20261101T000000Z", "bbb-fast-dear", case, minutes=10, cost=5.0)
+        _agentic("p", "20261101T000000Z", "ccc-fast-cheap", case, minutes=10, cost=2.0)
+    board = leaderboard.build(score=True, scorer=fake_scorer)
+    assert [r.slug for r in board.agentic] == ["ccc-fast-cheap", "bbb-fast-dear", "aaa-slow"]
+    n = len(SANITY.cases) + len(REAL.cases)
+    md = leaderboard.render(board)
+    row = next(line for line in md.split("## Ranking")[1].splitlines() if "| ccc-fast-cheap |" in line)
+    assert row.endswith(f"| {10 * n:.1f} | ${2.0 * n:.2f} |")
+    table = md.split(f"### {REAL.cases[0]}")[1].split("### ")[0]
+    order = [s for s in ("ccc-fast-cheap", "bbb-fast-dear", "aaa-slow") if f"| {s} |" in table]
+    assert [line.split("|")[2].strip() for line in table.splitlines()
+            if line.startswith("| ") and line.split("|")[2].strip() in order] == order

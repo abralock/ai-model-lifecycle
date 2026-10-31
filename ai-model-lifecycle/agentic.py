@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import fnmatch
 import json
 import os
@@ -200,7 +201,10 @@ CASES: dict[str, AgenticCase] = {
               "every scenario in e2e/ (Manufacturers, Ratings and Reports features) works "
               "against the real REST API, with the element ids, table layout, hash routing "
               "and delete confirmation the task's acceptance criteria require."),
-        deliverables=["src/app/**", "src/styles.css"],
+        # everything under src/: the scorer restores the fixed files (main.ts,
+        # index.html) itself, and an app may keep assets beside src/app (Opus
+        # put the original PNGs in src/images, used from styles.css)
+        deliverables=["src/**"],
         setup=_setup_r2,
         task_note=("The Angular workspace (the task's `workspace/`) is the current "
                    "directory, with node_modules installed; `gwt/` and `e2e/` are here too. "
@@ -317,7 +321,12 @@ def answer_from(before: dict[str, bytes], after: dict[str, bytes],
         try:
             body = after[rel].decode("utf-8")
         except UnicodeDecodeError:
-            continue                    # binary deliverables cannot travel as text
+            # images and other binaries travel base64-encoded (scorers.base
+            # parse_binaries); dropping them failed a correct r2 build whose
+            # CSS used the original app's PNGs (2026-10-31)
+            data = base64.encodebytes(after[rel]).decode("ascii").rstrip("\n")
+            parts.append(f"### BINARY: {rel}\n```base64\n{data}\n```\n")
+            continue
         # scorers.base.parse_files ends a block at any fence line, so a
         # deliverable that itself contains one (rare: code, SQL and config
         # files don't) would arrive cut short
@@ -539,7 +548,8 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
             res.error = res.error or f"agent did not run (exit {proc.returncode}): {tail[-400:]}"
         after = snapshot(ws, spec)
         res.output_text = answer_from(before, after, spec.deliverables)
-        res.files_changed = res.output_text.count("### FILE:") + res.output_text.count("### DELETE:")
+        res.files_changed = sum(res.output_text.count(h)
+                                for h in ("### FILE:", "### DELETE:", "### BINARY:"))
         # A session that ran to its end or to the time limit delivered whatever
         # it left behind. One that never started, or that Claude Code ended
         # with an error (login, usage limit, API), says nothing about the

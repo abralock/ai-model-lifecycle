@@ -12,6 +12,8 @@ reason=...). This keeps the overall run alive (requirement: "never crash the who
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import sys
@@ -151,7 +153,7 @@ def parse_deletes(output_text: str) -> list[str]:
 # `### EDIT: path` + SEARCH/REPLACE blocks (for cases too big to re-emit)       #
 # --------------------------------------------------------------------------- #
 _EDIT_RE = re.compile(r"^#{1,4}\s*EDIT:\s*(?P<path>.+?)\s*$", re.MULTILINE)
-_ANY_HEADER_RE = re.compile(r"^#{1,4}\s*(FILE|EDIT|DELETE):", re.MULTILINE)
+_ANY_HEADER_RE = re.compile(r"^#{1,4}\s*(FILE|EDIT|DELETE|BINARY):", re.MULTILINE)
 _SR_RE = re.compile(
     r"^<{5,9} SEARCH[^\n]*\n(?P<search>.*?)^={5,9}[ \t]*\n(?P<replace>.*?)^>{5,9} REPLACE[^\n]*$",
     re.MULTILINE | re.DOTALL,
@@ -276,6 +278,26 @@ class AppliedOutput:
         return bool(self.written or self.deleted or self.edited or self.edit_failures)
 
 
+# `### BINARY: path` + a base64 fenced block: a binary file (e.g. a PNG the
+# agent copied into an Angular app) that cannot travel as a FILE block. Only
+# agentic.py writes these; a model reply never does.
+_BINARY_RE = re.compile(
+    r"^#{1,4}\s*BINARY:\s*(?P<path>.+?)\s*\n```[a-z0-9]*\n(?P<data>[A-Za-z0-9+/=\n]*?)\n?```",
+    re.MULTILINE)
+
+
+def parse_binaries(output_text: str) -> dict[str, bytes]:
+    """{relative_path: bytes} from `### BINARY:` base64 blocks (malformed ones skipped)."""
+    out = {}
+    for m in _BINARY_RE.finditer(output_text or ""):
+        try:
+            out[m.group("path").strip().strip("`")] = base64.b64decode(
+                m.group("data").replace("\n", ""), validate=True)
+        except (binascii.Error, ValueError):
+            continue
+    return out
+
+
 def apply_output(output_text: str, dest: Path, strip_prefix: str = "") -> AppliedOutput:
     """Apply a model answer to the project copied at `dest`: DELETEs, then FILEs, then EDITs.
 
@@ -297,6 +319,12 @@ def apply_output(output_text: str, dest: Path, strip_prefix: str = "") -> Applie
             out.deleted.append(norm(rel))
     files = {norm(k): v for k, v in parse_files(output_text).items()}
     out.written = write_files(files, dest)
+    for rel, data in parse_binaries(output_text).items():
+        target = (dest_r / norm(rel)).resolve()
+        if str(target).startswith(str(dest_r) + "/"):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            out.written.append(norm(rel))
     edits = [Edit(norm(e.path), e.search, e.replace) for e in parse_edits(output_text)]
     out.edited, out.edit_failures = apply_edits(edits, dest)
     return out

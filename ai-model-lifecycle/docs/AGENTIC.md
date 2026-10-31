@@ -42,7 +42,7 @@ Sonnet 5.5 working in Claude Code with `/goal` delivered a passing migration in
 |---|---|---|---|
 | r1 Spring Boot 2 → 3 | the module (pom.xml, src) | Maven, Java 17 | pom.xml, src/** |
 | r1b JHipster → Boot 3 | the whole app at the pinned commit, node_modules installed | ./mvnw, Cypress (Chromium) | pom.xml, src/main/java, src/main/resources |
-| r2 GWT → Angular | the Angular workspace, `gwt/`, `e2e/` | `ng build`, `sh backend/run.sh` (the original app + REST API on :8888, your build at /ng/) | src/app/**, src/styles.css |
+| r2 GWT → Angular | the Angular workspace, `gwt/`, `e2e/` | `ng build`, `sh backend/run.sh` (the original app + REST API on :8888, your build at /ng/) | src/** (the scorer restores the fixed files) |
 | r3 Oracle → Postgres | Oracle procedures, seed.sql, the Oracle result sets (`expected/`) | psql | postgres/** |
 | r4 Schema + load + index | schema.sql, target_query.sql | psql, EXPLAIN | solution.sql |
 | r5 ETL + dashboard | etl_spec.md, dashboard_schema.sql, R4's schema + seeder | psql, python3 | etl.sql |
@@ -62,5 +62,6 @@ reaches earlier attempts.
   (e.g. OpenCode) to take the same test.
 * Agentic attempts take tens of minutes each and use the subscription's usage
   limit; run one task with `--case` before a full sweep.
+* Binary deliverables (such as images) travel base64-encoded as `### BINARY:` blocks.
 * A delivered file that itself contains a Markdown fence line cannot travel
   through the FILE-block answer intact (code, SQL and config files never do).

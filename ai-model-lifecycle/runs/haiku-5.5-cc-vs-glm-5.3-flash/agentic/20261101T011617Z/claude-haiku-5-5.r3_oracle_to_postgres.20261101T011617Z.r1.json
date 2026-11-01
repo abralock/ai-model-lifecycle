@@ -1,0 +1,41 @@
+{
+  "pair_id": "haiku-5.5-cc-vs-glm-5.3-flash",
+  "case_id": "r3_oracle_to_postgres",
+  "model_slug": "claude-haiku-5-5",
+  "model_name": "Claude Haiku 5.5 (CC)",
+  "role": "current",
+  "rep": 1,
+  "run_id": "20261101T011617Z",
+  "mode": "agentic",
+  "effort_override": "low",
+  "reasoning_requested": {
+    "effort": "low"
+  },
+  "time_limit_s": 1200,
+  "goal": "postgres/schema.sql and postgres/procedures.sql exist; applied in that order to an empty database and loaded with seed.sql, sp_customer_tier() returns exactly the rows in expected/output.csv and sp_monthly_report('2026-09') exactly the rows in expected/output_monthly.csv; and neither file uses DUAL, NVL(, ROWNUM, (+), VARCHAR2 or sysdate.",
+  "provider": "claude-code",
+  "ok": true,
+  "error": null,
+  "timed_out": false,
+  "latency_s": 50.14,
+  "num_turns": 10,
+  "tool_calls": 9,
+  "duration_api_ms": 46691,
+  "tool_time_s": 0.55,
+  "thinking_time_s": 16.47,
+  "input_tokens": 16,
+  "output_tokens": 9147,
+  "cache_read_tokens": 175183,
+  "cache_write_tokens": 15460,
+  "cost_estimate_usd": 0.011643425,
+  "final_message": "Both procedures are converted and produce the golden result sets. The goal condition holds: I applied `schema.sql` then `procedures.sql` to the empty `aidb` database, loaded `seed.sql`, and both results match their expected CSVs. Neither file contains any of the banned constructs.\n\n**Files written**\n- `postgres/schema.sql`: the six tables. `NUMBER` ids and counts became `bigint`, money became `numeric(12,2)` or `numeric(10,2)`, `VARCHAR2(n)` became `varchar(n)`, and `DATE` became `timestamptz`.\n- `postgres/procedures.sql`: `sp_customer_tier()` and `sp_monthly_report(p_month varchar)` as `LANGUAGE plpgsql` procedures.\n\n**Translation choices**\n- `sysdate` became `now()`, and `NVL` became `COALESCE`.\n- I removed the `COMMIT` and `ROLLBACK` statements. A procedure cannot commit inside a caller's transaction, so the caller now controls the transaction. An error still rolls back the procedure's work.\n- The `SELECT COUNT(*) FROM DUAL` check in `sp_monthly_report` always returns 1 in Oracle, so the no-data branch can never run. I dropped that query rather than fake it. I kept the `EXCEPTION WHEN OTHERS THEN RAISE` handler to re-raise errors.\n- The Oracle `seq_tier_id` sequence was declared but never used by the original procedure, so I did not carry it over.\n\n**Verification**\n- Row sets match the golden CSVs exactly, compared after sorting.\n- The rows come back in a different order from `expected/output*.csv`. Those files appear to reflect Oracle's unordered output, and no single `ORDER BY` reproduces both files. The procedures have no `ORDER BY`, so the order is not guaranteed.\n- I left the `aidb` public schema empty after testing.",
+  "files_changed": 2,
+  "output_text": "### FILE: postgres/schema.sql\n```\n-- PostgreSQL schema translated from the Oracle DDL in oracle/.\n-- Type mapping: NUMBER -> bigint (ids/counts) or numeric(p,s) (money);\n-- Oracle character types -> varchar(n); Oracle DATE -> timestamptz.\n\nCREATE TABLE customers (\n    customer_id   bigint PRIMARY KEY,\n    customer_name varchar(120) NOT NULL,\n    status        varchar(20)  DEFAULT 'ACTIVE'\n);\n\nCREATE TABLE orders (\n    order_id    bigint PRIMARY KEY,\n    customer_id bigint NOT NULL,\n    order_total numeric(12,2) NOT NULL,\n    order_date  timestamptz NOT NULL\n);\n\nCREATE TABLE customer_tiers (\n    customer_id   bigint PRIMARY KEY,\n    customer_name varchar(120),\n    total_spend   numeric(12,2),\n    order_count   bigint,\n    tier          varchar(20),\n    computed_at   timestamptz\n);\n\nCREATE TABLE products (\n    product_id   bigint PRIMARY KEY,\n    product_name varchar(120),\n    category     varchar(60)\n);\n\nCREATE TABLE order_items (\n    order_item_id bigint PRIMARY KEY,\n    order_id      bigint,\n    product_id    bigint,\n    quantity      bigint,\n    unit_price    numeric(10,2)\n);\n\nCREATE TABLE monthly_report (\n    report_month varchar(7),\n    category     varchar(60),\n    revenue      numeric(12,2),\n    units_sold   bigint\n);\n```\n\n### FILE: postgres/procedures.sql\n```\n-- PostgreSQL (plpgsql) translation of the Oracle procedures in oracle/.\n-- Transaction control (COMMIT/ROLLBACK) is left to the caller: a procedure\n-- invoked inside an outer transaction cannot commit, and an unhandled error\n-- already rolls back the procedure's work. The Oracle sequence seq_tier_id was\n-- declared but never used by the original procedure, so it is not carried over.\n\nCREATE OR REPLACE PROCEDURE sp_customer_tier()\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    v_tier varchar(20);\n    rec    RECORD;\nBEGIN\n    DELETE FROM customer_tiers;\n\n    FOR rec IN\n        SELECT o.customer_id,\n               c.customer_name,\n               SUM(o.order_total) AS total_spend,\n               COUNT(*)           AS order_count\n        FROM   orders o\n        JOIN   customers c ON c.customer_id = o.customer_id\n        WHERE  COALESCE(c.status, 'ACTIVE') = 'ACTIVE'\n        GROUP  BY o.customer_id, c.customer_name\n    LOOP\n        IF rec.total_spend >= 1000 THEN\n            v_tier := 'GOLD';\n        ELSIF rec.total_spend >= 500 THEN\n            v_tier := 'SILVER';\n        ELSE\n            v_tier := 'BRONZE';\n        END IF;\n\n        INSERT INTO customer_tiers\n            (customer_id, customer_name, total_spend, order_count, tier, computed_at)\n        VALUES\n            (rec.customer_id, rec.customer_name, rec.total_spend, rec.order_count,\n             v_tier, now());\n    END LOOP;\nEND;\n$$;\n\nCREATE OR REPLACE PROCEDURE sp_monthly_report(p_month IN varchar)\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    rec RECORD;\nBEGIN\n    DELETE FROM monthly_report WHERE report_month = p_month;\n\n    FOR rec IN\n        SELECT p.category                                       AS category,\n               COALESCE(SUM(oi.quantity * oi.unit_price), 0)    AS revenue,\n               COALESCE(SUM(oi.quantity), 0)::bigint            AS units_sold\n        FROM   order_items oi\n        JOIN   products p ON p.product_id = oi.product_id\n        GROUP  BY p.category\n    LOOP\n        INSERT INTO monthly_report\n            (report_month, category, revenue, units_sold)\n        VALUES\n            (p_month, rec.category, rec.revenue, rec.units_sold);\n    END LOOP;\nEXCEPTION\n    WHEN OTHERS THEN\n        RAISE;\nEND;\n$$;\n```\n",
+  "passed": true,
+  "reason": "plpgsql translation matches golden result set; no oracle dialect tokens",
+  "checks": {
+    "dialect_clean": true,
+    "parity": true
+  },
+  "created_at": 1793496370.7689862
+}

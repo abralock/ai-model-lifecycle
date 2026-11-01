@@ -392,3 +392,23 @@ def test_wakeup_segments_sum_turns_and_tokens_but_not_running_totals():
     assert res.cache_read_tokens == 200 and res.cache_write_tokens == 2
     assert res.cost_estimate_usd == 2.62 and res.duration_api_ms == 800
     assert res.final_message == "Build passes." and res.error is None
+
+
+def test_events_whose_message_is_text_do_not_break_parsing():
+    """Claude Code can emit e.g. a system/permission_denied event whose
+    `message` is a plain string; parsing must skip it, not crash the attempt."""
+    lines = [
+        json.dumps({"type": "assistant", "timestamp": "2026-11-01T00:00:00Z", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]}}),
+        json.dumps({"type": "system", "subtype": "permission_denied",
+                    "message": "This command requires explicit approval."}),
+        json.dumps({"type": "user", "timestamp": "2026-11-01T00:00:04Z", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1"}]}}),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "num_turns": 3,
+                    "total_cost_usd": 0.5, "result": "done", "usage": {}}),
+    ]
+    assert agentic.stream_timing(lines) == (4.0, None)
+    res = agentic.AgenticResult(pair_id=PAIR, case_id="r1_springboot2to3", model_slug="m",
+                                model_name="M", role="current", rep=0, run_id="r")
+    agentic._summarize_stream(lines, res)
+    assert res.num_turns == 3 and res.tool_calls == 1 and res.error is None

@@ -471,7 +471,18 @@ def stream_timing(lines: list[str]) -> tuple[float | None, float | None]:
 
 
 def _summarize_stream(lines: list[str], res: AgenticResult) -> None:
+    """Fold the stream into the result.
+
+    A session that uses background tools (Monitor, ScheduleWakeup) emits one
+    `result` event per wake-up segment. In each, num_turns and usage cover that
+    segment only, while total_cost_usd and duration_api_ms are running totals.
+    So turns and tokens are summed and cost/API time come from the last event.
+    """
     res.tool_time_s, res.thinking_time_s = stream_timing(lines)
+    turns = None
+    last_error = None
+    tokens = {"input_tokens": 0, "output_tokens": 0,
+              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     for line in lines:
         try:
             ev = json.loads(line)
@@ -483,16 +494,24 @@ def _summarize_stream(lines: list[str], res: AgenticResult) -> None:
                     res.tool_calls += 1
         elif ev.get("type") == "result":
             usage = ev.get("usage") or {}
-            res.num_turns = ev.get("num_turns")
+            if ev.get("num_turns") is not None:
+                turns = (turns or 0) + int(ev["num_turns"])
+            for k in tokens:
+                tokens[k] += int(usage.get(k) or 0)
             res.duration_api_ms = ev.get("duration_api_ms")
             res.cost_estimate_usd = ev.get("total_cost_usd")
-            res.input_tokens = int(usage.get("input_tokens") or 0)
-            res.output_tokens = int(usage.get("output_tokens") or 0)
-            res.cache_read_tokens = int(usage.get("cache_read_input_tokens") or 0)
-            res.cache_write_tokens = int(usage.get("cache_creation_input_tokens") or 0)
-            res.final_message = str(ev.get("result") or "")[:4000]
-            if ev.get("is_error"):
-                res.error = f"claude error: {res.final_message[:300] or ev.get('subtype')}"
+            message = str(ev.get("result") or "")[:4000]
+            if message:
+                res.final_message = message
+            last_error = (f"claude error: {message[:300] or ev.get('subtype')}"
+                          if ev.get("is_error") else None)
+    if last_error:
+        res.error = last_error
+    res.num_turns = turns
+    res.input_tokens = tokens["input_tokens"]
+    res.output_tokens = tokens["output_tokens"]
+    res.cache_read_tokens = tokens["cache_read_input_tokens"]
+    res.cache_write_tokens = tokens["cache_creation_input_tokens"]
 
 
 def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run_id: str,

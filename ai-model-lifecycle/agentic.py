@@ -3,9 +3,11 @@ would, with tools, until it delivers.
 
 A single-shot run (runner.py) hands the model the sources as text and takes one
 reply; nothing is compiled or tested. Here the model works inside a copy of the
-case's project with Claude Code: it edits files, builds, runs the tests, reads
-the errors and fixes them, until the case's goal is met (Claude Code's `/goal`)
-or the time limit is reached.
+case's project with a coding agent: it edits files, builds, runs the tests,
+reads the errors and fixes them, until the case's goal is met (`/goal`) or the
+time limit is reached. Claude models run in Claude Code; open-weight models on
+OpenCode Go run in opencode (OpencodeBackend), with the same goal, workspace,
+time limit and scoring.
 
 Every attempt runs in a throwaway Docker container (docker/agent/Dockerfile:
 Java 17 + Maven, Node 20 + Chromium, PostgreSQL 17), so model-run commands never
@@ -47,11 +49,18 @@ from pathlib import Path
 from typing import Any, Callable
 
 import common
+import pricing
 from cases import sources
 from common import case_dir, load_config, load_env, new_run_id
 
 IMAGE = os.environ.get("GATE1_AGENT_IMAGE", "gate1-agent:latest")
 TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+# opencode (open-weight models on OpenCode Go): the repo keeps the Go key as
+# OPENCODE_GO_API_KEY; opencode reads it as OPENCODE_API_KEY inside the sandbox.
+OPENCODE_KEY_SOURCE = "OPENCODE_GO_API_KEY"
+OPENCODE_KEY_ENV = "OPENCODE_API_KEY"
+OPENCODE_PROVIDER = "opencode-go"
+OPENCODE_VERSION_LABEL = "gate1.opencode.version"
 DEFAULT_TIME_LIMIT_S = 3600
 # Build caches shared across attempts (dependencies only; never model output).
 M2_VOLUME = "gate1_agent_m2"
@@ -351,7 +360,10 @@ class AgenticResult:
     reasoning_requested: dict[str, Any] | None = None
     time_limit_s: int = DEFAULT_TIME_LIMIT_S
     goal: str = ""
-    provider: str = "claude-code"
+    provider: str = "claude-code"       # the route: claude-code | opencode-go
+    agent: str = "claude-code"          # the agent CLI: claude-code | opencode
+    agent_version: str | None = None
+    goal_mode: str | None = None        # how the goal keeps the agent going (native /goal)
     ok: bool = False                    # the agent ran and finished (not an infra error)
     error: str | None = None
     timed_out: bool = False
@@ -366,6 +378,10 @@ class AgenticResult:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     cost_estimate_usd: float | None = None
+    cost_reported_usd: float | None = None   # opencode's own per-step cost sum
+    reasoning_tokens: int = 0                # opencode: reported separately (also in output_tokens)
+    model_time_source: str | None = None     # "reported" (Claude Code) | "derived" (opencode)
+    agent_error: str | None = None           # an agent error that ended the session (scored)
     final_message: str = ""
     files_changed: int = 0
     output_text: str = ""               # the harvested answer the scorer reads
@@ -394,14 +410,23 @@ def write_control(control: Path, goal: str, system: str) -> None:
     (control / "system.md").write_text(system, encoding="utf-8")
 
 
+def _docker_prefix(name: str, ws: Path, control: Path, postgres: bool,
+                   env_args: list[str]) -> list[str]:
+    """`docker run` up to the image: the workspace and the read-only control
+    dir are the first two mounts, then the dependency caches. `env_args` pass
+    secrets by name only (`-e NAME`), so no value reaches a command line."""
+    return ["docker", "run", "--rm", "--name", name,
+            "-v", f"{ws}:/work", "-v", f"{control}:/gate1:ro",
+            "-v", f"{M2_VOLUME}:/home/agent/.m2", "-v", f"{NPM_VOLUME}:/home/agent/.npm",
+            *env_args,
+            "-e", f"GATE1_POSTGRES={1 if postgres else 0}",
+            "--shm-size", "1g", IMAGE]
+
+
 def docker_command(name: str, ws: Path, control: Path, model: str,
                    effort: str | None, postgres: bool) -> list[str]:
-    cmd = ["docker", "run", "--rm", "--name", name,
-           "-v", f"{ws}:/work", "-v", f"{control}:/gate1:ro",
-           "-v", f"{M2_VOLUME}:/home/agent/.m2", "-v", f"{NPM_VOLUME}:/home/agent/.npm",
-           "-e", TOKEN_ENV,                    # by name: the value comes from our env
-           "-e", f"GATE1_POSTGRES={1 if postgres else 0}",
-           "--shm-size", "1g", IMAGE,
+    cmd = _docker_prefix(name, ws, control, postgres,
+                         ["-e", TOKEN_ENV]) + [   # by name: the value comes from our env
            # the prompt (`/goal ...`) arrives on stdin, the task in a file
            "sh", "-c", 'exec claude -p "$@" < /gate1/prompt.txt', "claude",
            "--model", model,
@@ -439,6 +464,19 @@ def _content_blocks(ev: dict) -> list:
     return content if isinstance(content, list) else []
 
 
+def _merge_spans(spans: list[tuple[float, float]]) -> float | None:
+    """Total seconds covered by (start, end) spans, overlaps counted once;
+    None when there are no spans."""
+    if not spans:
+        return None
+    total, end = 0.0, float("-inf")
+    for a, b in sorted(spans):
+        if b > end:
+            total += b - max(a, end)
+            end = b
+    return total
+
+
 def stream_timing(lines: list[str]) -> tuple[float | None, float | None]:
     """(tool time, thinking time) in seconds from a Claude Code session stream.
 
@@ -468,13 +506,7 @@ def stream_timing(lines: list[str]) -> tuple[float | None, float | None]:
                 started[block["id"]] = at
             elif block.get("type") == "tool_result" and block.get("tool_use_id") in started:
                 spans.append((started.pop(block["tool_use_id"]), at))
-    tool = None
-    if spans:
-        tool, end = 0.0, float("-inf")
-        for a, b in sorted(spans):
-            if b > end:
-                tool += b - max(a, end)
-                end = b
+    tool = _merge_spans(spans)
     return (round(tool, 2) if tool is not None else None,
             round(thinking_ms / 1000, 2) if saw_thinking else None)
 
@@ -525,17 +557,305 @@ def _summarize_stream(lines: list[str], res: AgenticResult) -> None:
     res.cache_write_tokens = tokens["cache_creation_input_tokens"]
 
 
+# --------------------------------------------------------------------------- #
+# opencode backend (open-weight models on OpenCode Go)                         #
+# --------------------------------------------------------------------------- #
+# Set as literal `-e NAME=VALUE` (no secrets): keep the sandbox's opencode to
+# the config we write, with no project config, Claude Code files, external
+# skills or self-updates.
+OPENCODE_ENV_FLAGS = {
+    "OPENCODE_CONFIG": "/gate1/opencode.json",
+    "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+    "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+    "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+    "OPENCODE_DISABLE_AUTOUPDATE": "1",
+    "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
+}
+
+
+def opencode_config(model_id: str, effort: str | None) -> dict[str, Any]:
+    """The per-attempt opencode config (opencode v2 schema, checked against
+    v2.2.5's `debug config` / `debug agents`). No secrets: the key arrives by
+    environment variable name.
+
+    - only the OpenCode Go provider may be used, so a wrong model id can never
+      fall through to opencode's pay-as-you-go provider;
+    - every tool is allowed except sub-agents, as Claude Code runs with the
+      Agent tool disallowed;
+    - no MCP servers, plugins, LSP, formatter (it would rewrite the model's
+      files), snapshots or sharing;
+    - the thinking level goes in the build agent's request body as
+      `reasoning_effort`: Go models expose no low/medium/high variants
+      ("Variant unavailable", probed 2026-11-01).
+    """
+    model = {"providerID": OPENCODE_PROVIDER, "model": model_id}
+    agents: dict[str, Any] = {"title": {"model": model}}
+    if effort:
+        agents["build"] = {"request": {"body": {"reasoning_effort": effort}}}
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "model": model,
+        "agents": agents,
+        "policies": [
+            {"action": "provider.use", "resource": "*", "effect": "deny"},
+            {"action": "provider.use", "resource": OPENCODE_PROVIDER, "effect": "allow"},
+        ],
+        "permissions": [
+            {"action": "*", "resource": "*", "effect": "allow"},
+            {"action": "subagent", "resource": "*", "effect": "deny"},
+        ],
+        "instructions": ["/gate1/system.md"],
+        "mcp": {}, "plugins": [], "lsp": False, "formatter": False,
+        "snapshots": False, "share": "disabled", "update": "disable",
+    }
+
+
+def write_opencode_control(control: Path, goal: str, system: str, model_id: str,
+                           effort: str | None) -> None:
+    """Same goal and task files as Claude Code (`/goal ...` on stdin, the task
+    as instructions), plus the opencode config."""
+    write_control(control, goal, system)
+    (control / "opencode.json").write_text(
+        json.dumps(opencode_config(model_id, effort), indent=2), encoding="utf-8")
+
+
+def opencode_command(name: str, ws: Path, control: Path, model_id: str,
+                     postgres: bool) -> list[str]:
+    env_args = ["-e", OPENCODE_KEY_ENV]          # by name: the value comes from our env
+    for k, v in OPENCODE_ENV_FLAGS.items():
+        env_args += ["-e", f"{k}={v}"]
+    return _docker_prefix(name, ws, control, postgres, env_args) + [
+        "sh", "-c", 'exec opencode run "$@" < /gate1/prompt.txt', "opencode",
+        "--standalone", "--format", "json", "--auto", "--thinking",
+        "--title", "gate1", "--model", f"{OPENCODE_PROVIDER}/{model_id}"]
+
+
+def _opencode_env() -> dict[str, str]:
+    """What docker needs plus the Go key, renamed to what opencode reads. No
+    Claude token and no other provider's key."""
+    keep = ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CONTEXT")
+    env = {k: v for k, v in os.environ.items() if k in keep}
+    if os.environ.get(OPENCODE_KEY_SOURCE):
+        env[OPENCODE_KEY_ENV] = os.environ[OPENCODE_KEY_SOURCE]
+    return env
+
+
+def _ms(value: Any) -> float | None:
+    return float(value) / 1000 if isinstance(value, (int, float)) else None
+
+
+def _opencode_infra(err: dict) -> bool:
+    """A provider-side failure (auth, quota, rate limit, routing, outage) says
+    nothing about the model: an infra error, not scored."""
+    status = err.get("status")
+    return (str(err.get("type") or "").startswith("provider.")
+            or status in (401, 402, 403, 408, 429)
+            or (isinstance(status, int) and status >= 500))
+
+
+def summarize_opencode(lines: list[str], res: AgenticResult, model_id: str) -> None:
+    """Fold `opencode run --format json` events into the result.
+
+    Each step_finish closes one model call and carries that step's tokens and
+    cost (deltas, so summed). Tool time is the merged span of each tool call's
+    own start/end. opencode reports no API time, so model time is derived:
+    the steps' wall time minus the tool time inside them.
+    """
+    tokens = {"input": 0, "output": 0, "reasoning": 0, "cache_read": 0, "cache_write": 0}
+    steps, reported, saw_cost = 0, 0.0, False
+    tool_spans: list[tuple[float, float]] = []
+    step_spans: list[tuple[float, float]] = []
+    step_open: float | None = None
+    thinking_s, saw_thinking = 0.0, False
+    error: dict | None = None
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        kind = ev.get("type")
+        part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
+        at = _ms(ev.get("timestamp"))
+        if kind == "step_start":
+            step_open = at
+        elif kind == "step_finish":
+            steps += 1
+            tk = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+            cache = tk.get("cache") if isinstance(tk.get("cache"), dict) else {}
+            for key, val in (("input", tk.get("input")), ("output", tk.get("output")),
+                             ("reasoning", tk.get("reasoning")),
+                             ("cache_read", cache.get("read")), ("cache_write", cache.get("write"))):
+                tokens[key] += int(val or 0)
+            if isinstance(part.get("cost"), (int, float)):
+                reported += float(part["cost"])
+                saw_cost = True
+            if step_open is not None and at is not None and at >= step_open:
+                step_spans.append((step_open, at))
+            step_open = None
+        elif kind == "tool_use":
+            res.tool_calls += 1
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            t = state.get("time") if isinstance(state.get("time"), dict) else {}
+            a, b = _ms(t.get("start")), _ms(t.get("end"))
+            if a is not None and b is not None and b >= a:
+                tool_spans.append((a, b))
+        elif kind == "reasoning":
+            t = part.get("time") if isinstance(part.get("time"), dict) else {}
+            a, b = _ms(t.get("start")), _ms(t.get("end"))
+            if a is not None and b is not None and b >= a:
+                thinking_s += b - a
+                saw_thinking = True
+        elif kind == "text":
+            if part.get("text"):
+                res.final_message = str(part["text"])[:4000]
+        elif kind == "error" and isinstance(ev.get("error"), dict):
+            error = ev["error"]
+    res.num_turns = steps or None
+    res.input_tokens, res.output_tokens = tokens["input"], tokens["output"] + tokens["reasoning"]
+    res.reasoning_tokens = tokens["reasoning"]
+    res.cache_read_tokens, res.cache_write_tokens = tokens["cache_read"], tokens["cache_write"]
+    res.cost_reported_usd = round(reported, 6) if saw_cost else None
+    if steps:
+        res.cost_estimate_usd = round(pricing.cost_usd(
+            model_id, res.input_tokens, res.output_tokens,
+            res.cache_read_tokens, res.cache_write_tokens), 6)
+    tool = _merge_spans(tool_spans)
+    res.tool_time_s = round(tool, 2) if tool is not None else None
+    if step_spans:
+        step_total = sum(b - a for a, b in step_spans)
+        res.duration_api_ms = int(max(0.0, step_total - (tool or 0.0)) * 1000)
+        res.model_time_source = "derived"
+    res.thinking_time_s = round(thinking_s, 2) if saw_thinking else None
+    if error is not None:
+        status = error.get("status")
+        message = error.get("message") or (error.get("data") or {}).get("message") or ""
+        detail = (f"opencode error: {error.get('type') or error.get('name') or 'error'}: "
+                  f"{message}{f' (status {status})' if status else ''}")
+        if _opencode_infra(error):
+            res.error = detail[:600]
+        else:
+            res.agent_error = detail[:600]
+    elif not steps and not res.timed_out:
+        tail = " ".join(ln.strip() for ln in lines[-3:] if ln.strip())
+        res.error = f"agent did not run: opencode made no model call: {tail[-400:]}"
+
+
+_OPENCODE_LIMIT_RE = re.compile(
+    r"usage limit|rate limit|limit (?:reached|exceeded)|quota|weekly limit|monthly limit|"
+    r"5-hour|insufficient (?:balance|credit)|payment required|invalid credential|"
+    r"unauthori[sz]ed|provider\.auth|provider\.no-route|status 40[123]|status 429|"
+    # not a quota, but every later attempt would fail the same way
+    r"made no model call", re.I)
+
+
+# --------------------------------------------------------------------------- #
+# Backends                                                                     #
+# --------------------------------------------------------------------------- #
+class ClaudeCodeBackend:
+    """Claude models through the Claude Code CLI on the subscription."""
+    name = "claude-code"
+    route = "claude-code"
+    goal_mode = "native"
+    efforts = common.EFFORT_LEVELS
+    secret_envs = (TOKEN_ENV,)
+    version: str | None = None
+
+    def limit_re(self) -> re.Pattern:
+        return _LIMIT_RE
+
+    def write_control(self, control: Path, goal: str, system: str, model_id: str,
+                      effort: str | None) -> None:
+        write_control(control, goal, system)
+
+    def command(self, name: str, ws: Path, control: Path, model_id: str,
+                effort: str | None, postgres: bool) -> list[str]:
+        return docker_command(name, ws, control, model_id, effort, postgres)
+
+    def env(self) -> dict[str, str]:
+        return _container_env()
+
+    def summarize(self, lines: list[str], res: AgenticResult, model_id: str) -> None:
+        _summarize_stream(lines, res)
+        if res.duration_api_ms is not None:
+            res.model_time_source = "reported"
+
+    def preflight(self) -> None:
+        preflight()
+
+
+class OpencodeBackend:
+    """Open-weight models through opencode on the OpenCode Go subscription."""
+    name = "opencode"
+    route = OPENCODE_PROVIDER
+    goal_mode = "native"
+    efforts = common.GO_EFFORT_LEVELS
+    secret_envs = (OPENCODE_KEY_ENV,)
+    version: str | None = None
+
+    def limit_re(self) -> re.Pattern:
+        return _OPENCODE_LIMIT_RE
+
+    def write_control(self, control: Path, goal: str, system: str, model_id: str,
+                      effort: str | None) -> None:
+        write_opencode_control(control, goal, system, model_id, effort)
+
+    def command(self, name: str, ws: Path, control: Path, model_id: str,
+                effort: str | None, postgres: bool) -> list[str]:
+        return opencode_command(name, ws, control, model_id, postgres)
+
+    def env(self) -> dict[str, str]:
+        return _opencode_env()
+
+    def summarize(self, lines: list[str], res: AgenticResult, model_id: str) -> None:
+        summarize_opencode(lines, res, model_id)
+
+    def preflight(self) -> None:
+        if not os.environ.get(OPENCODE_KEY_SOURCE):
+            raise NotReady(f"{OPENCODE_KEY_SOURCE} is not set: add the OpenCode Go key to .env")
+        _docker_ready()
+        label = subprocess.run(
+            ["docker", "image", "inspect", "--format",
+             f'{{{{index .Config.Labels "{OPENCODE_VERSION_LABEL}"}}}}', IMAGE],
+            capture_output=True, text=True).stdout.strip()
+        if not label or label == "<no value>":
+            raise NotReady(f"sandbox image {IMAGE} has no opencode: rebuild it "
+                           f"(docker build -t {IMAGE} docker/agent)")
+        self.version = label
+
+
+def backend_for(cfg, model) -> ClaudeCodeBackend | OpencodeBackend:
+    """Claude models run in Claude Code, OpenCode Go models in opencode."""
+    api = cfg.api_for(model)
+    if api is not None and api.family == "claude-code":
+        return ClaudeCodeBackend()
+    if model.api == OPENCODE_PROVIDER:
+        return OpencodeBackend()
+    raise ValueError(f"agentic runs use Claude Code or opencode: {model.name} is on neither "
+                     "the Claude Code nor the OpenCode Go route")
+
+
+def _redact(line: str, secrets: list[str]) -> str:
+    for value in secrets:
+        line = line.replace(value, "[REDACTED]")
+    return line
+
+
 def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run_id: str,
                 *, time_limit_s: int = DEFAULT_TIME_LIMIT_S, effort: str | None = None,
                 workroot: Path | None = None, score: bool = True,
-                scorer: Callable | None = None) -> AgenticResult:
+                scorer: Callable | None = None, backend=None) -> AgenticResult:
     spec = CASES[case_id]
+    backend = backend or backend_for(cfg, model)
     sources.ensure(case_id)
     res = AgenticResult(pair_id=pair_id, case_id=case_id, model_slug=model.id,
                         model_name=model.name, role=role, rep=rep, run_id=run_id,
                         effort_override=effort,
                         reasoning_requested={"effort": effort} if effort else None,
-                        time_limit_s=time_limit_s, goal=spec.goal, created_at=time.time())
+                        time_limit_s=time_limit_s, goal=spec.goal, created_at=time.time(),
+                        provider=backend.route, agent=backend.name,
+                        agent_version=backend.version, goal_mode=backend.goal_mode)
     out = record_path(pair_id, run_id, model.id, case_id, rep)
     out.parent.mkdir(parents=True, exist_ok=True)
     root = workroot or Path(common.RUNS_DIR).parent / ".agentic-work"
@@ -547,18 +867,23 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
         before = snapshot(ws, spec)
         name = f"gate1-agent-{uuid.uuid4().hex[:10]}"
         control = ws.with_name(ws.name + ".control")
-        write_control(control, spec.goal,
-                      SYSTEM_NOTE + "\n\n# The task\n\n" + task_prompt(case_id))
-        cmd = docker_command(name, ws, control, model.id, effort, spec.postgres)
+        backend.write_control(control, spec.goal,
+                              SYSTEM_NOTE + "\n\n# The task\n\n" + task_prompt(case_id),
+                              model.id, effort)
+        cmd = backend.command(name, ws, control, model.id, effort, spec.postgres)
+        env = backend.env()
+        # a key the agent prints (e.g. by running `env`) never reaches runs/
+        secrets = [env[k] for k in backend.secret_envs if len(env.get(k) or "") >= 8]
         lines: list[str] = []
         stream_log = out.with_suffix(".stream.jsonl")
         t0 = time.monotonic()
         with open(stream_log, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL, text=True, env=_container_env())
+                                    stdin=subprocess.DEVNULL, text=True, env=env)
 
             def pump() -> None:
                 for line in proc.stdout:            # type: ignore[union-attr]
+                    line = _redact(line, secrets)
                     log.write(line)
                     lines.append(line)
 
@@ -572,7 +897,7 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
                 proc.wait(timeout=60)
             reader.join(timeout=30)
         res.latency_s = round(time.monotonic() - t0, 2)
-        _summarize_stream(lines, res)
+        backend.summarize(lines, res, model.id)
         if proc.returncode not in (0, None) and not res.timed_out and res.num_turns is None:
             tail = "".join(lines[-5:]).strip()
             res.error = res.error or f"agent did not run (exit {proc.returncode}): {tail[-400:]}"
@@ -606,10 +931,18 @@ def load_records(pair_id: str, run_id: str) -> list[dict]:
     return [json.loads(f.read_text()) for f in sorted(agentic_dir(pair_id, run_id).glob("*.json"))]
 
 
+def display_name(rec: dict) -> str:
+    """The model's name, marked with its agent when that isn't Claude Code."""
+    agent = rec.get("agent") or "claude-code"
+    name = rec.get("model_name") or rec.get("model_slug") or "?"
+    return name if agent == "claude-code" else f"{name} · {agent}"
+
+
 def render_report(pair_id: str, run_id: str, recs: list[dict]) -> str:
     lines = [f"# Agentic runs — {pair_id} · run {run_id}", "",
-             "The model works on a copy of the project inside a sandbox with Claude Code "
-             "(edit, build, test, fix) until its `/goal` is met or the time limit is hit; "
+             "The model works on a copy of the project inside a sandbox with an agent "
+             "(Claude Code for Claude models, opencode for open-weight models): edit, build, "
+             "test, fix, until its `/goal` is met or the time limit is hit; "
              "what it delivered is then scored by the case's acceptance check, including "
              "hidden tests it never saw. Infra errors (the session never ran) are left out.",
              "", "## Summary", "",
@@ -617,7 +950,7 @@ def render_report(pair_id: str, run_id: str, recs: list[dict]) -> str:
              "|---|---|---|---:|---:|---:|---:|"]
     groups: dict[tuple, list[dict]] = {}
     for r in recs:
-        groups.setdefault((r["case_id"], r["model_name"], r.get("effort_override") or "default"),
+        groups.setdefault((r["case_id"], display_name(r), r.get("effort_override") or "default"),
                           []).append(r)
     for (case, name, effort), rs in sorted(groups.items()):
         ran = [r for r in rs if r.get("ok")]
@@ -638,7 +971,7 @@ def render_report(pair_id: str, run_id: str, recs: list[dict]) -> str:
             result += " (time limit)"
         reason = (r.get("error") if not r.get("ok") else r.get("reason") or "").replace("|", "\\|")
         cost = r.get("cost_estimate_usd")
-        lines.append(f"| {r['case_id']} | {r['rep'] + 1} | {r['model_name']} | {result} | "
+        lines.append(f"| {r['case_id']} | {r['rep'] + 1} | {display_name(r)} | {result} | "
                      f"{float(r.get('latency_s') or 0) / 60:.1f} | "
                      f"{'n/a' if cost is None else f'${cost:.2f}'} | {r.get('num_turns') or 'n/a'} | "
                      f"{r.get('tool_calls', 0)} | {r.get('files_changed', 0)} | {reason[:160]} |")
@@ -660,6 +993,10 @@ def preflight() -> None:
     if not os.environ.get(TOKEN_ENV):
         raise NotReady(f"{TOKEN_ENV} is not set: run `claude setup-token` and add the token "
                        "to .env (agentic runs log in with it inside the sandbox)")
+    _docker_ready()
+
+
+def _docker_ready() -> None:
     if shutil.which("docker") is None:
         raise NotReady("docker not found on PATH")
     if subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True).returncode:
@@ -668,12 +1005,11 @@ def preflight() -> None:
 
 def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
         repeats: int = 1, time_limit_s: int = DEFAULT_TIME_LIMIT_S,
-        effort: str | None = None) -> tuple[str, list[AgenticResult]]:
+        effort: str | None = None, backend=None,
+        max_spend_usd: float | None = None) -> tuple[str, list[AgenticResult]]:
     pair = cfg.get_pair(pair_id)
     model = pair.current if role == "current" else pair.target
-    api = cfg.api_for(model)
-    if api is None or api.family != "claude-code":
-        raise ValueError(f"agentic runs use Claude Code: {model.name} is not on the Claude Code route")
+    backend = backend or backend_for(cfg, model)
     # a comma-separated list, a suite name from models.yaml, or every case
     if case in (None, "all"):
         cases = list(CASES)
@@ -685,25 +1021,34 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
     if unknown:
         raise ValueError(f"no agentic setup for case(s): {', '.join(unknown)}")
     effort = effort or cfg.effort
+    if effort and effort not in backend.efforts:
+        raise ValueError(f"{backend.name} takes effort {', '.join(backend.efforts)}; got {effort!r}")
     run_id = new_run_id()
     results = []
     stop = False
-    print(f"agentic run id: {run_id}  model: {model.name}  effort: {effort or 'default'}")
+    spent = 0.0
+    print(f"agentic run id: {run_id}  model: {model.name}  agent: {backend.name}  "
+          f"effort: {effort or 'default'}")
     for case_id in cases:
         for rep in range(repeats):
             if stop:
                 break
             r = run_attempt(cfg, pair_id, role, model, case_id, rep, run_id,
-                            time_limit_s=time_limit_s, effort=effort)
+                            time_limit_s=time_limit_s, effort=effort, backend=backend)
             results.append(r)
             status = ("INFRA " + (r.error or "")[:120] if not r.ok else
                       ("PASS" if r.passed else f"FAIL ({r.reason[:120]})"))
             print(f"  {case_id} rep {rep + 1}/{repeats}: {r.latency_s / 60:.1f} min, "
                   f"{r.num_turns or 0} turns, ${r.cost_estimate_usd or 0:.2f}"
                   f"{' [time limit]' if r.timed_out else ''}  {status}", flush=True)
-            if not r.ok and r.error and _LIMIT_RE.search(r.error):
+            if not r.ok and r.error and backend.limit_re().search(r.error):
                 # every later attempt would fail the same way
                 print(f"stopping: {r.error[:120]}", flush=True)
+                stop = True
+            spent += r.cost_estimate_usd or 0.0
+            if max_spend_usd is not None and spent >= max_spend_usd and not stop:
+                print(f"stopping: estimated spend ${spent:.2f} reached the "
+                      f"--max-spend-usd cap ${max_spend_usd:.2f}", flush=True)
                 stop = True
     report = agentic_dir(pair_id, run_id) / "REPORT.md"
     report.write_text(render_report(pair_id, run_id, load_records(pair_id, run_id)), encoding="utf-8")
@@ -720,14 +1065,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--time-limit", type=int, default=DEFAULT_TIME_LIMIT_S,
                     help="seconds per attempt (default 3600)")
-    ap.add_argument("--effort", help="Claude Code --effort level (default: models.yaml defaults.effort)")
+    ap.add_argument("--effort", help="thinking level: Claude Code --effort, or opencode's "
+                                     "reasoning_effort (default: models.yaml defaults.effort)")
+    ap.add_argument("--max-spend-usd", type=float,
+                    help="stop the batch once the estimated spend reaches this (list prices)")
     args = ap.parse_args(argv)
     load_env()
     cfg = load_config()
     try:
-        preflight()
+        pair = cfg.get_pair(args.pair)
+        backend = backend_for(cfg, pair.current if args.role == "current" else pair.target)
+        backend.preflight()
         run(cfg, args.pair, role=args.role, case=args.case, repeats=args.repeats,
-            time_limit_s=args.time_limit, effort=args.effort)
+            time_limit_s=args.time_limit, effort=args.effort, backend=backend,
+            max_spend_usd=args.max_spend_usd)
     except (NotReady, ValueError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

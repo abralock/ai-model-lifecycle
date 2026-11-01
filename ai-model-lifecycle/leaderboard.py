@@ -171,6 +171,7 @@ class AgenticRow:
     by_case: dict[str, AgenticTask] = field(default_factory=dict)
     infra: int = 0
     runs: list[str] = field(default_factory=list)
+    agent: str = "claude-code"          # claude-code | opencode
 
     @property
     def passes(self) -> int:
@@ -201,7 +202,7 @@ def agentic_rows(cases: list[str], *, score: bool, scorer=None,
     effort level across pairs and runs. A session that never ran is an infra
     error and left out; pass/fail comes from the scorer (score cache) so a
     scorer fix reaches old attempts too."""
-    pooled: dict[tuple[str, str], list[dict]] = {}
+    pooled: dict[tuple[str, str, str], list[dict]] = {}
     root = Path(common.RUNS_DIR)
     for f in sorted(root.glob("*/agentic/*/*.json")):
         rid = f.parent.name
@@ -211,12 +212,15 @@ def agentic_rows(cases: list[str], *, score: bool, scorer=None,
         if rec.get("mode") != "agentic":
             continue
         level = rec.get("effort_override") or "model default"
-        pooled.setdefault((rec.get("model_slug", "?"), level), []).append({**rec, "_run": rid})
+        # records from before the opencode backend carry no agent: Claude Code
+        agent = rec.get("agent") or "claude-code"
+        pooled.setdefault((rec.get("model_slug", "?"), level, agent), []).append({**rec, "_run": rid})
     rows = []
-    for (slug, level), recs in pooled.items():
+    for (slug, level, agent), recs in pooled.items():
         names = Counter(r.get("model_name") or slug for r in recs)
-        row = AgenticRow(slug=slug, name=names.most_common(1)[0][0], level=level,
-                         runs=sorted({r["_run"] for r in recs}))
+        name = names.most_common(1)[0][0]
+        row = AgenticRow(slug=slug, name=name if agent == "claude-code" else f"{name} · {agent}",
+                         level=level, runs=sorted({r["_run"] for r in recs}), agent=agent)
         for case in cases:
             ran = [r for r in recs if r.get("case_id") == case and r.get("ok")]
             row.infra += sum(1 for r in recs if r.get("case_id") == case and not r.get("ok"))
@@ -517,18 +521,22 @@ def render_agentic(board: Board) -> list[str]:
     """The primary result: migration the way it is done on a real project."""
     cases = [c for suite in SUITES for c in board.cases[suite]]
     lines = ["# Agentic migration (primary result)", "",
-             "The model works on a copy of the project in a sandbox with Claude Code, the way a "
-             "developer would: it changes code, builds, runs the tests and fixes what fails, "
+             "The model works on a copy of the project in a sandbox with a coding agent, the way "
+             "a developer would: it changes code, builds, runs the tests and fixes what fails, "
              "until its goal is met or the time limit is hit (agentic.py). What it delivered is "
              "then checked by the same acceptance test as single-shot, including hidden tests it "
              "never saw. Infra errors (sessions that never ran) are excluded.", "",
+             "Claude models run in Claude Code; open-weight models run in opencode (rows marked "
+             "\"· opencode\"), so an opencode row differs from a Claude row in both the model "
+             "and the agent.", "",
              "## Ranking", ""]
     if not board.agentic:
         return lines + ["_No agentic runs yet (`python agentic.py --pair <pair> --role current`)._", ""]
     lines += ["Models that tried every task rank first, then by pass rate; equal pass rates "
-              "are ranked by time, then cost. Time is the agent's wall-clock time and cost "
-              "Claude Code's estimate at API list prices; the ranking adds up each task's mean "
-              "attempt, i.e. one pass through the tasks tried.", "",
+              "are ranked by time, then cost. Time is the agent's wall-clock time. Cost is "
+              "Claude Code's estimate at API list prices, or for opencode rows the OpenCode Go "
+              "list price of the tokens used (quota, not a bill); the ranking adds up each "
+              "task's mean attempt, i.e. one pass through the tasks tried.", "",
               "| # | Model | Thinking level | Sanity passed | Real passed | Overall pass rate | "
               "Tasks tried | Time, all tasks (min) | Cost, all tasks |",
               "|---:|---|---|---:|---:|---:|---:|---:|---:|"]
@@ -575,7 +583,9 @@ def render_agentic(board: Board) -> list[str]:
               "that passed within T seconds (agentic budgets: models.yaml "
               "`agentic_time_budgets_s`). Tool / model time divides the time tools ran "
               "(builds, tests, servers; parallel calls merged) by the time the model spent in "
-              "API requests, summed over attempts that measured both; above 1 means the "
+              "API requests (opencode reports none: there it is the model steps' wall time "
+              "minus the tool time inside them), summed over attempts that measured both; "
+              "above 1 means the "
               "attempt was mostly waiting on builds and tests (docs/METRICS_PLAN.md §8).", ""]
     return lines
 

@@ -459,7 +459,7 @@ def test_a_repair_call_that_failed_is_not_a_repair_attempt(runs):
 # Agentic migration: the primary result                                        #
 # --------------------------------------------------------------------------- #
 def _agentic(pair, rid, slug, case, rep=0, *, passed=True, ok=True, minutes=20.0, cost=2.0,
-             effort="medium", name=None, tool_s=None, api_s=None):
+             effort="medium", name=None, tool_s=None, api_s=None, agent=None):
     d = common.RUNS_DIR / pair / "agentic" / rid
     d.mkdir(parents=True, exist_ok=True)
     rec = {"mode": "agentic", "pair_id": pair, "case_id": case, "model_slug": slug,
@@ -468,6 +468,8 @@ def _agentic(pair, rid, slug, case, rep=0, *, passed=True, ok=True, minutes=20.0
            "latency_s": minutes * 60, "cost_estimate_usd": cost, "num_turns": 30,
            "effort_override": effort, "tool_time_s": tool_s,
            "duration_api_ms": None if api_s is None else api_s * 1000}
+    if agent:
+        rec["agent"] = agent
     (d / f"{slug}.{case}.{rid}{f'.r{rep}' if rep else ''}.json").write_text(json.dumps(rec))
     (d / f"{slug}.{case}.{rid}.stream.jsonl").write_text("{}\n")      # never read as a record
 
@@ -575,3 +577,19 @@ def test_equal_pass_rates_rank_by_time_then_cost_not_name(runs):
     order = [s for s in ("ccc-fast-cheap", "bbb-fast-dear", "aaa-slow") if f"| {s} |" in table]
     assert [line.split("|")[2].strip() for line in table.splitlines()
             if line.startswith("| ") and line.split("|")[2].strip() in order] == order
+
+
+def test_opencode_rows_are_labelled_and_never_pooled_with_claude_code(runs):
+    """Old records carry no agent (Claude Code). The same model under two
+    agents makes two rows, and opencode rows say so."""
+    case = REAL.cases[0]
+    _agentic("a-vs-b", "20261101T000000Z", "glm-5.3", case, name="GLM-5.3", agent="opencode")
+    _agentic("a-vs-b", "20261101T000000Z", "haiku", case, name="Claude Haiku 5.5")
+    _agentic("c-vs-d", "20261101T000000Z", "haiku", case, name="Claude Haiku 5.5",
+             agent="opencode", minutes=40.0)
+    rows = leaderboard.agentic_rows(REAL.cases, score=False)
+    names = sorted((r.name, r.agent) for r in rows)
+    assert names == [("Claude Haiku 5.5", "claude-code"), ("Claude Haiku 5.5 · opencode", "opencode"),
+                     ("GLM-5.3 · opencode", "opencode")]
+    md = leaderboard.render(leaderboard.build(score=False))
+    assert "| GLM-5.3 · opencode |" in md and "both the model and the agent" in md

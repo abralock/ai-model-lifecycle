@@ -273,7 +273,8 @@ Acceptance criteria:
 
 ## 8. Agentic attempts (amendment 2026-10-31)
 
-An agentic attempt (`agentic.py`) is one Claude Code session in a sandbox that
+An agentic attempt (`agentic.py`) is one agent session (Claude Code for Claude
+models, opencode for open-weight models on OpenCode Go) in a sandbox that
 works on the project until its `/goal` is met or the time limit stops it; what
 it delivered is then scored by the same deterministic scorer, hidden tests
 included. One attempt is one opportunity to succeed, so the single-shot
@@ -285,9 +286,11 @@ For agentic attempt `i`:
   Scoring time stays outside it.
 - `P_i`: the scorer's verdict on what the attempt delivered (live scoring
   through the score cache, so a scorer fix reaches earlier attempts).
-- A session that never ran, or that Claude Code ended with an error (login,
-  usage limit, API), is an infrastructure error and is excluded from every
-  metric. A session stopped by the time limit is a scored attempt.
+- A session that never ran, or that the agent ended with a provider-side
+  error (login, usage limit or quota, rate limit, API outage), is an
+  infrastructure error and is excluded from every metric. A session stopped by
+  the time limit is a scored attempt, and so is one an opencode error caused
+  by the model ended (e.g. context overflow; recorded as `agent_error`).
 
 ### 8.1 TTFS
 
@@ -323,10 +326,15 @@ than to producing text, so the stream-phase execution / thinking ratio of §1.3
 is replaced by:
 
 - **Model time:** `duration_api_ms`, the session's time in API requests
-  (thinking and writing), as Claude Code reports it.
+  (thinking and writing), as Claude Code reports it. opencode reports no API
+  time, so for opencode attempts it is derived: the sum of each model step's
+  wall time (`step_start` to `step_finish`) minus the merged tool time
+  (`model_time_source: derived`). It is an approximation and may differ from
+  the reported thinking time.
 - **Tool time:** for each tool call, from the `tool_use` message to its
-  `tool_result`, by the events' own timestamps in the session stream, with
-  overlapping (parallel) calls merged so no second counts twice.
+  `tool_result` (opencode: the tool part's own `time.start` / `time.end`), by
+  the events' own timestamps in the session stream, with overlapping
+  (parallel) calls merged so no second counts twice.
 
 ```text
 Tool / model time = sum(tool_time_s) / sum(model_time_s)

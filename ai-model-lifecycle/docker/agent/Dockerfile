@@ -27,6 +27,26 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm cache clean --force
+# opencode, the agent for open-weight models (OpenCode Go). v2 is not on npm
+# (npm `opencode-ai` is still v1, without /goal): the pinned GitHub release
+# binary, checked against the release's SHA256SUMS. A build-time run leaves
+# root-owned state (/tmp/opencode is its temp dir), which the agent user
+# could not write to, so it is removed.
+ARG OPENCODE_VERSION=2.2.5
+RUN case "$(dpkg --print-architecture)" in \
+        arm64) plat=linux-arm64 ;; amd64) plat=linux-x64 ;; \
+        *) echo "no opencode build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && mkdir /tmp/oc-dl && cd /tmp/oc-dl \
+    && base="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}" \
+    && curl -fsSLO "$base/opencode-$plat.tar.gz" && curl -fsSLO "$base/SHA256SUMS" \
+    && grep " opencode-$plat.tar.gz\$" SHA256SUMS | sha256sum -c - \
+    && tar xzf "opencode-$plat.tar.gz" && install -m 755 opencode /usr/local/bin/opencode \
+    && cd / && rm -rf /tmp/oc-dl \
+    && test "$(opencode --version)" = "opencode v${OPENCODE_VERSION}" \
+    && rm -rf /tmp/opencode /root/.local/share/opencode /root/.cache/opencode \
+              /root/.config/opencode /root/.local/state/opencode
+LABEL gate1.claude_code.version=$CLAUDE_CODE_VERSION gate1.opencode.version=$OPENCODE_VERSION
 # Claude Code refuses to skip permission prompts as root; the agent is a plain user.
 RUN useradd -m -s /bin/bash agent && install -d -o agent /work /home/agent/.m2 /home/agent/.npm
 ENV CHROME_BIN=/usr/bin/chromium JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64 \

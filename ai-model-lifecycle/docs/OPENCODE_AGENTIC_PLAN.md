@@ -1,7 +1,12 @@
 # Plan: open-weight models in the agentic harness via opencode
 
-Status: **planned, not started.** Implementation begins after the low-effort
-Claude sweep (Sonnet, Haiku, Opus 5.5) completes. Drafted 2026-11-01.
+Status: **implemented 2026-11-01** (see docs/AGENTIC.md, "Two agents"). The
+GLM-5.3 smoke test passed r4. Not yet observed: `/goal` re-prompting an agent
+that stops early. Differences from this plan, found by probing opencode v2.2.5:
+Go models have no low/medium/high variants, so the thinking level is sent as
+`reasoning_effort` in the build agent's request body; the config is written in
+v2's native form (`policies`, `permissions`, `agents`, `snapshots`, `plugins`,
+`update`). Drafted 2026-11-01.
 
 ## Goal
 

@@ -324,10 +324,19 @@ def test_preflight_needs_the_token(monkeypatch):
         agentic.preflight()
 
 
-def test_only_claude_code_models_run_agentic(monkeypatch):
+def test_claude_models_run_in_claude_code_and_go_models_in_opencode():
     cfg = load_config()
-    with pytest.raises(ValueError, match="Claude Code"):
-        agentic.run(cfg, PAIR, role="target")                 # DeepSeek via OpenCode Go
+    pair = cfg.get_pair(PAIR)
+    assert isinstance(agentic.backend_for(cfg, pair.current), agentic.ClaudeCodeBackend)
+    assert isinstance(agentic.backend_for(cfg, pair.target), agentic.OpencodeBackend)  # DeepSeek
+    openrouter = cfg.get_pair("opus-4.8-vs-5.5").current
+    with pytest.raises(ValueError, match="Claude Code nor the OpenCode Go"):
+        agentic.backend_for(cfg, openrouter)
+
+
+def test_opencode_refuses_claude_only_effort_levels_before_running_anything():
+    with pytest.raises(ValueError, match="opencode takes effort low, medium, high"):
+        agentic.run(load_config(), PAIR, role="target", effort="xhigh")
 
 
 @pytest.mark.parametrize("arg, expected", [
@@ -412,3 +421,192 @@ def test_events_whose_message_is_text_do_not_break_parsing():
                                 model_name="M", role="current", rep=0, run_id="r")
     agentic._summarize_stream(lines, res)
     assert res.num_turns == 3 and res.tool_calls == 1 and res.error is None
+
+
+
+# --------------------------------------------------------------------------- #
+# opencode backend                                                             #
+# --------------------------------------------------------------------------- #
+OC_KEY = "oc-test-key-0123456789"
+
+
+def test_opencode_command_passes_the_key_by_name_and_the_goal_by_file(tmp_path):
+    agentic.write_opencode_control(tmp_path / "c", "the goal mentions java",
+                                   "the task mentions java", "glm-5.3", "medium")
+    ws, control = tmp_path / "ws", tmp_path / "c"
+    cmd = agentic.opencode_command("n", ws, control, "glm-5.3", postgres=True)
+    assert not any("java" in a for a in cmd)
+    envs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-e"]
+    assert envs[0] == "OPENCODE_API_KEY"                    # name only, no value
+    assert "OPENCODE_CONFIG=/gate1/opencode.json" in envs and "GATE1_POSTGRES=1" in envs
+    assert not any(e.startswith("OPENCODE_API_KEY=") for e in envs)
+    mounts = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-v"]
+    assert mounts[:2] == [f"{ws}:/work", f"{control}:/gate1:ro"]
+    assert "< /gate1/prompt.txt" in cmd[cmd.index("-c") + 1]
+    for flag in ("--standalone", "--auto", "--thinking"):
+        assert flag in cmd
+    assert cmd[cmd.index("--format") + 1] == "json"
+    assert cmd[cmd.index("--model") + 1] == "opencode-go/glm-5.3"
+    assert (control / "prompt.txt").read_text() == "/goal the goal mentions java"
+
+
+def test_opencode_config_allows_only_go_and_no_sub_agents(tmp_path):
+    agentic.write_opencode_control(tmp_path, "g", "t", "kimi-k3", "low")
+    cfg = json.loads((tmp_path / "opencode.json").read_text())
+    assert cfg["policies"] == [
+        {"action": "provider.use", "resource": "*", "effect": "deny"},
+        {"action": "provider.use", "resource": "opencode-go", "effect": "allow"}]
+    assert cfg["permissions"][-1] == {"action": "subagent", "resource": "*", "effect": "deny"}
+    assert cfg["model"] == {"providerID": "opencode-go", "model": "kimi-k3"}
+    assert cfg["agents"]["build"]["request"]["body"] == {"reasoning_effort": "low"}
+    assert cfg["agents"]["title"]["model"] == cfg["model"]
+    assert cfg["instructions"] == ["/gate1/system.md"]
+    assert cfg["lsp"] is False and cfg["formatter"] is False and cfg["snapshots"] is False
+    assert cfg["mcp"] == {} and cfg["plugins"] == []
+    no_effort = agentic.opencode_config("kimi-k3", None)
+    assert "build" not in no_effort["agents"]
+
+
+def test_each_agent_gets_only_its_own_credential(monkeypatch):
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", OC_KEY)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "claude-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "api-key")
+    monkeypatch.setenv("OPENROUTER_TOKEN", "or-token")
+    oc = agentic._opencode_env()
+    assert oc["OPENCODE_API_KEY"] == OC_KEY
+    assert not {"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENROUTER_TOKEN",
+                "OPENCODE_GO_API_KEY"} & set(oc)
+    cc = agentic._container_env()
+    assert cc["CLAUDE_CODE_OAUTH_TOKEN"] == "claude-token"
+    assert not {"OPENCODE_API_KEY", "OPENCODE_GO_API_KEY", "ANTHROPIC_API_KEY"} & set(cc)
+
+
+def test_opencode_preflight_needs_the_go_key(monkeypatch):
+    monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+    with pytest.raises(agentic.NotReady, match="OPENCODE_GO_API_KEY"):
+        agentic.OpencodeBackend().preflight()
+
+
+def _oc_stream(*, error=None, steps=True, key_leak=False):
+    ev = []
+    if steps:
+        ev += [
+            {"type": "step_start", "timestamp": 1_000_000, "part": {"type": "step-start"}},
+            {"type": "reasoning", "timestamp": 1_001_000,
+             "part": {"text": "think", "time": {"start": 1_000_000, "end": 1_002_000}}},
+            {"type": "tool_use", "timestamp": 1_010_000, "part": {"tool": "shell", "state": {
+                "status": "completed", "time": {"start": 1_003_000, "end": 1_010_000},
+                "output": f"KEY={OC_KEY}" if key_leak else "ok"}}},
+            {"type": "tool_use", "timestamp": 1_009_000, "part": {"tool": "read", "state": {
+                "status": "completed", "time": {"start": 1_004_000, "end": 1_009_000}}}},
+            {"type": "step_finish", "timestamp": 1_012_000, "part": {
+                "reason": "tool-calls", "cost": 0.01,
+                "tokens": {"input": 1000, "output": 200, "reasoning": 50,
+                           "cache": {"read": 4000, "write": 0}}}},
+            {"type": "step_start", "timestamp": 1_013_000, "part": {}},
+            {"type": "text", "timestamp": 1_014_000, "part": {"text": "Goal met."}},
+            {"type": "step_finish", "timestamp": 1_015_000, "part": {
+                "reason": "stop", "cost": 0.02,
+                "tokens": {"input": 500, "output": 100, "reasoning": 0,
+                           "cache": {"read": 6000, "write": 10}}}},
+        ]
+    if error:
+        ev.append({"type": "error", "timestamp": 1_016_000, "error": error})
+    return "".join(json.dumps(e) + "\n" for e in ev)
+
+
+def _summarize_oc(stream, model="glm-5.3"):
+    res = agentic.AgenticResult(pair_id=PAIR, case_id="r1_springboot2to3", model_slug=model,
+                                model_name="GLM-5.3", role="target", rep=0, run_id="r")
+    agentic.summarize_opencode(stream.splitlines(), res, model)
+    return res
+
+
+def test_opencode_steps_sum_into_turns_tokens_cost_and_time():
+    res = _summarize_oc(_oc_stream())
+    assert res.num_turns == 2 and res.tool_calls == 2
+    assert res.input_tokens == 1500 and res.output_tokens == 350 and res.reasoning_tokens == 50
+    assert res.cache_read_tokens == 10000 and res.cache_write_tokens == 10
+    assert res.cost_reported_usd == pytest.approx(0.03)
+    assert res.cost_estimate_usd == pytest.approx(
+        agentic.pricing.cost_usd("glm-5.3", 1500, 350, 10000, 10))
+    assert res.tool_time_s == 7.0                          # 3–10 s, the read inside it counted once
+    # steps 0–12 s and 13–15 s = 14 s of wall time, minus 7 s of tools
+    assert res.duration_api_ms == 7000 and res.model_time_source == "derived"
+    assert res.thinking_time_s == 2.0
+    assert res.final_message == "Goal met." and res.error is None and res.agent_error is None
+
+
+def test_opencode_provider_errors_are_infra_and_stop_the_batch():
+    res = _summarize_oc(_oc_stream(steps=False, error={
+        "type": "provider.auth", "message": "Upstream request failed: Invalid credential",
+        "status": 401}))
+    assert res.error.startswith("opencode error: provider.auth: Upstream request failed")
+    assert agentic._OPENCODE_LIMIT_RE.search(res.error)
+    quota = _summarize_oc(_oc_stream(error={"type": "unknown", "message": "weekly limit reached",
+                                            "status": 429}))
+    assert quota.error and agentic._OPENCODE_LIMIT_RE.search(quota.error)
+
+
+def test_an_opencode_error_the_model_caused_is_scored_not_infra():
+    res = _summarize_oc(_oc_stream(error={"type": "session.context-overflow",
+                                          "message": "context window exceeded"}))
+    assert res.error is None
+    assert res.agent_error == "opencode error: session.context-overflow: context window exceeded"
+
+
+def test_opencode_that_never_called_a_model_did_not_run():
+    res = _summarize_oc("opencode: 1: exec: opencode: not found\n")
+    assert res.error.startswith("agent did not run: opencode made no model call")
+    assert "not found" in res.error and agentic._OPENCODE_LIMIT_RE.search(res.error)
+    timed_out = agentic.AgenticResult(pair_id=PAIR, case_id="r1_springboot2to3", model_slug="m",
+                                      model_name="M", role="target", rep=0, run_id="r",
+                                      timed_out=True)
+    agentic.summarize_opencode([], timed_out, "m")
+    assert timed_out.error is None                          # the time limit is scored
+
+
+def test_an_opencode_attempt_is_scored_recorded_and_its_key_redacted(env, monkeypatch):
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", OC_KEY)
+    seen = {}
+
+    def popen(cmd, **kw):
+        seen["cmd"], seen["env"] = cmd, kw["env"]
+        return _FakeAgent(cmd, lambda ws: (ws / "pom.xml").write_text("<boot3/>"),
+                          _oc_stream(key_leak=True))
+
+    monkeypatch.setattr(agentic.subprocess, "Popen", popen)
+    model = env["cfg"].get_pair(PAIR).target                # DeepSeek V4 Pro on Go
+    backend = agentic.OpencodeBackend()
+    backend.version = "2.2.5"
+    res = agentic.run_attempt(env["cfg"], PAIR, "target", model, "r1_springboot2to3", 0,
+                              "20261101T000000Z", workroot=env["tmp"] / "work",
+                              scorer=env["scorer"], backend=backend)
+    assert res.ok and res.passed and res.num_turns == 2
+    assert (res.agent, res.provider, res.agent_version, res.goal_mode) == (
+        "opencode", "opencode-go", "2.2.5", "native")
+    assert seen["env"]["OPENCODE_API_KEY"] == OC_KEY and OC_KEY not in " ".join(seen["cmd"])
+    rec = agentic.record_path(PAIR, "20261101T000000Z", model.id, "r1_springboot2to3", 0)
+    log = rec.with_suffix(".stream.jsonl").read_text()
+    assert OC_KEY not in log and "[REDACTED]" in log
+    assert OC_KEY not in rec.read_text()
+    report = agentic.render_report(PAIR, "20261101T000000Z",
+                                   agentic.load_records(PAIR, "20261101T000000Z"))
+    assert "DeepSeek V4 Pro · opencode" in report
+
+
+def test_the_batch_stops_at_the_spend_cap(env, monkeypatch):
+    calls = []
+
+    def attempt(*a, **kw):
+        calls.append(a[4])
+        return agentic.AgenticResult(pair_id=PAIR, case_id=a[4], model_slug="m", model_name="m",
+                                     role="target", rep=a[5], run_id=a[6], ok=True, passed=True,
+                                     cost_estimate_usd=3.0)
+
+    monkeypatch.setattr(agentic, "run_attempt", attempt)
+    monkeypatch.setattr(agentic, "render_report", lambda *a: "")
+    monkeypatch.setattr(agentic, "agentic_dir", lambda p, r: env["tmp"])
+    agentic.run(env["cfg"], PAIR, role="target", case="r1_springboot2to3", repeats=5,
+                backend=agentic.OpencodeBackend(), max_spend_usd=5.0)
+    assert len(calls) == 2                                   # $3, then $6 >= $5: stop

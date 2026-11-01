@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-01T04:43:47+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-01T06:16:23+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -25,7 +25,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | low | 12/12 | 2/2 | 100% (14/14) | 6/6 | 64.7 | $2.57 |
 | 8 | Claude Haiku 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 72.5 | $4.34 |
 | 9 | Claude Opus 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 76.4 | $14.64 |
-| 10 | GLM-5.3 · opencode | medium | 1/1 | — | 100% (1/1) | 1/6 | 6.9 | $0.44 |
+| 10 | GLM-5.3 · opencode | medium | 13/13 | — | 100% (13/13) | 4/6 | 29.4 | $1.98 |
 
 ### r1_springboot2to3 — Spring Boot 2 → 3 (small app)
 
@@ -37,9 +37,10 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 4 | Claude Sonnet 5.5 (CC) | medium | 3/3 | 100% | 0.8 | 0.8 | 100% | 100% | 100% | 1.30 | $0.07 | $0.07 | 5 | 20261031T120615Z |
 | 5 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 1.1 | 1.1 | 100% | 100% | 100% | 0.22 | $0.25 | $0.25 | 8 | 20261031T123749Z |
 | 6 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 1.6 | 1.6 | 67% | 100% | 100% | 0.15 | $0.36 | $0.36 | 11 | 20261031T183901Z |
-| 7 | Claude Haiku 5.5 (CC) | low | 3/3 | 100% | 2.9 | 2.9 | 0% | 100% | 100% | 2.13 | $0.02 | $0.02 | 16 | 20261101T011617Z |
-| 8 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 2.9 | 2.9 | 0% | 100% | 100% | 1.55 | $0.02 | $0.02 | 16 | 20261031T121809Z |
-| 9 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 5.1 | 5.1 | 0% | 33% | 100% | 1.62 | $0.03 | $0.03 | 24 | 20261031T165728Z |
+| 7 | GLM-5.3 · opencode | medium | 3/3 | 100% | 2.3 | 2.3 | 67% | 100% | 100% | 0.29 | $0.14 | $0.14 | 14 | 20261101T044458Z |
+| 8 | Claude Haiku 5.5 (CC) | low | 3/3 | 100% | 2.9 | 2.9 | 0% | 100% | 100% | 2.13 | $0.02 | $0.02 | 16 | 20261101T011617Z |
+| 9 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 2.9 | 2.9 | 0% | 100% | 100% | 1.55 | $0.02 | $0.02 | 16 | 20261031T121809Z |
+| 10 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 5.1 | 5.1 | 0% | 33% | 100% | 1.62 | $0.03 | $0.03 | 24 | 20261031T165728Z |
 
 ### r3_oracle_to_postgres — Oracle → PostgreSQL procedures
 
@@ -54,6 +55,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 1.0 | 1.0 | 100% | 100% | 100% | 0.01 | $0.01 | $0.01 | 11 | 20261031T121809Z |
 | 8 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 1.3 | 1.3 | 100% | 100% | 100% | 0.01 | $0.28 | $0.28 | 6 | 20261031T183901Z |
 | 9 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 1.8 | 1.8 | 67% | 100% | 100% | 0.01 | $0.02 | $0.02 | 14 | 20261031T165728Z |
+| 10 | GLM-5.3 · opencode | medium | 3/3 | 100% | 8.9 | 8.9 | 0% | 0% | 67% | 0.08 | $0.64 | $0.64 | 29 | 20261101T044458Z |
 
 ### r4_schema_load_optimize — Schema load + query optimization
 
@@ -68,7 +70,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 1.2 | 1.2 | 100% | 100% | 100% | 0.14 | $0.25 | $0.25 | 6 | 20261031T123749Z |
 | 8 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 1.5 | 1.5 | 100% | 100% | 100% | 0.12 | $0.31 | $0.31 | 7 | 20261031T183901Z |
 | 9 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 2.1 | 2.1 | 33% | 100% | 100% | 0.10 | $0.02 | $0.02 | 16 | 20261031T165728Z |
-| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 6.9 | 6.9 | 0% | 0% | 100% | 0.12 | $0.44 | $0.44 | 18 | 20261101T043154Z |
+| 10 | GLM-5.3 · opencode | medium | 4/4 | 100% | 9.0 | 9.0 | 0% | 0% | 50% | 0.11 | $0.62 | $0.62 | 22 | 20261101T043154Z, 20261101T044458Z |
 
 ### r5_etl_dashboard — ETL job + dashboard schema
 
@@ -83,6 +85,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 3.5 | 3.5 | 0% | 67% | 100% | 0.93 | $0.02 | $0.02 | 13 | 20261031T165728Z |
 | 8 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 4.0 | 4.0 | 0% | 67% | 100% | 1.20 | $0.47 | $0.47 | 12 | 20261031T123749Z |
 | 9 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 5.4 | 5.4 | 0% | 67% | 100% | 0.94 | $0.62 | $0.62 | 13 | 20261031T183901Z |
+| 10 | GLM-5.3 · opencode | medium | 3/3 | 100% | 9.3 | 9.3 | 0% | 33% | 33% | 0.40 | $0.58 | $0.58 | 26 | 20261101T044458Z |
 
 ### r1b_jhipster_boot3 — JHipster app → Spring Boot 3 / Java 17
 

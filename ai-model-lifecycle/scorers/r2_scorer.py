@@ -14,7 +14,10 @@ under src/app/. Then:
     App Engine dev server running the GWT war, which also serves the REST API
     at /api), seeded fresh, and the hidden Playwright parity suite
     (scorers/fixtures/r2_parity/, 8 tests ported from the app's Cucumber
-    features) runs against it. All 8 must pass.
+    features) runs against it. All 8 must pass. A failed test gets one
+    retry; a pass on the retry counts ("flaky", listed in
+    details["parity_flaky"]), and tests that fail both tries are listed in
+    details["parity_failed"].
 
 `python -m scorers.r2_scorer --baseline` runs the same suite against the GWT
 original instead, which is how the suite itself was validated.
@@ -134,7 +137,13 @@ def run_parity(base_path: str, angular_dist: Path | None, res: ScoreResult) -> b
                        cwd=CACHE / "e2e", timeout=PARITY_TIMEOUT_S, env=env)
         res.details["parity_tail"] = out[-2500:]
         passed, failed = parity_counts(report)
-        res.details["parity_tests"] = {"passed": passed, "failed": failed, "expected": MIN_PARITY}
+        outcomes = parity_outcomes(report)
+        res.details["parity_tests"] = {"passed": passed, "failed": failed,
+                                       "flaky": len(outcomes["flaky"]), "expected": MIN_PARITY}
+        if outcomes["failed"]:
+            res.details["parity_failed"] = outcomes["failed"]
+        if outcomes["flaky"]:
+            res.details["parity_flaky"] = outcomes["flaky"]
         return rc == 0 and failed == 0 and passed >= MIN_PARITY
     finally:
         _run(["docker", "rm", "-f", name])
@@ -143,12 +152,47 @@ def run_parity(base_path: str, angular_dist: Path | None, res: ScoreResult) -> b
 
 
 def parity_counts(report: Path) -> tuple[int, int]:
-    """(passed, failed) from Playwright's JSON reporter output; (0, 0) if unreadable."""
+    """(passed, failed) from Playwright's JSON reporter output; (0, 0) if unreadable.
+
+    The suite retries a failed test once (playwright.config.ts). A test that
+    passes on that retry is "flaky" and counts as passed: a single flaky
+    failure once failed a working port (GLM-5.3 r2, 2026-11-01: 7/8 at attempt
+    time, 8/8 in six later scorings). A real defect fails both tries.
+    """
     try:
         stats = json.loads(report.read_text(encoding="utf-8")).get("stats", {})
     except (OSError, json.JSONDecodeError):
         return 0, 0
-    return int(stats.get("expected", 0)), int(stats.get("unexpected", 0)) + int(stats.get("flaky", 0))
+    return (int(stats.get("expected", 0)) + int(stats.get("flaky", 0)),
+            int(stats.get("unexpected", 0)))
+
+
+def parity_outcomes(report: Path) -> dict[str, list[str]]:
+    """Titles ("<describe> › <test>") of the tests that failed both tries and
+    of those that passed only on their retry, from the nested suites of
+    Playwright's JSON report; empty lists if unreadable."""
+    out: dict[str, list[str]] = {"failed": [], "flaky": []}
+    try:
+        root = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return out
+
+    def walk(suite: dict, path: list[str]) -> None:
+        for spec in suite.get("specs", []):
+            title = " › ".join([*path, str(spec.get("title", "?"))])
+            for t in spec.get("tests", []):
+                status = t.get("status")
+                if status == "unexpected":
+                    out["failed"].append(title)
+                elif status == "flaky":
+                    out["flaky"].append(title)
+        for child in suite.get("suites", []):
+            # the top level is the spec file; describe blocks below it
+            walk(child, path + [str(child.get("title", "?"))])
+
+    for top in root.get("suites", []):
+        walk(top, [])
+    return out
 
 
 def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None,

@@ -43,7 +43,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from .base import ScoreResult, apply_output, cache_dir, cli, parse_edits, parse_files
+from .base import ScoreResult, apply_output, cache_dir, cli, parse_edits, parse_files, record_tests
 from .base import run_command as _run
 
 CASE_ID = "r2_gwt_to_angular"
@@ -137,6 +137,7 @@ def run_parity(base_path: str, angular_dist: Path | None, res: ScoreResult) -> b
                        cwd=CACHE / "e2e", timeout=PARITY_TIMEOUT_S, env=env)
         res.details["parity_tail"] = out[-2500:]
         passed, failed = parity_counts(report)
+        record_parity_tests(res, passed=passed, failed=failed)
         outcomes = parity_outcomes(report)
         res.details["parity_tests"] = {"passed": passed, "failed": failed,
                                        "flaky": len(outcomes["flaky"]), "expected": MIN_PARITY}
@@ -149,6 +150,13 @@ def run_parity(base_path: str, angular_dist: Path | None, res: ScoreResult) -> b
         _run(["docker", "rm", "-f", name])
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def record_parity_tests(res: ScoreResult, *, passed: int, failed: int, ran: bool = True) -> None:
+    """The parity suite as the e2e count, out of all MIN_PARITY tests: a test
+    skipped after a failure in its serial group counts as not passed."""
+    record_tests(res, "e2e", passed=passed if ran else 0,
+                 total=max(MIN_PARITY, passed + failed), ran=ran)
 
 
 def parity_counts(report: Path) -> tuple[int, int]:
@@ -225,6 +233,8 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
             dist = build_angular(ws, res)
             res.checks["build"] = dist is not None
             res.checks["parity"] = dist is not None and run_parity("/ng/", dist, res)
+            if dist is None:
+                record_parity_tests(res, passed=0, failed=0, ran=False)
     finally:
         if not workdir:
             shutil.rmtree(ws, ignore_errors=True)

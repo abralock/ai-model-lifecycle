@@ -45,9 +45,11 @@ class ScoreCache:
     def __call__(self, case_id: str, output_text: str, slug: str):
         key = hashlib.sha256(f"{self.fp}\0{case_id}\0{output_text}".encode()).hexdigest()
         if key in self.data:
-            return SimpleNamespace(**self.data[key])
+            return SimpleNamespace(**{"tests": None, **self.data[key]})
         sr = self.scorer(case_id, output_text, slug)
-        result = {"passed": bool(sr.passed), "reason": sr.reason or ""}
+        # per-kind test counts (scorers.base.record_tests) for partial results
+        tests = (getattr(sr, "details", None) or {}).get("tests")
+        result = {"passed": bool(sr.passed), "reason": sr.reason or "", "tests": tests}
         # a harness failure (unverified, scorer crash) says nothing about the
         # answer: keep it out of the cache so a fixed setup re-scores it
         if not _HARNESS_PATTERNS.search(result["reason"]):

@@ -40,7 +40,7 @@ from pathlib import Path
 
 from cases import sources
 
-from .base import ScoreResult, apply_output, cache_dir, cli, parse_edits, parse_files
+from .base import ScoreResult, apply_output, cache_dir, cli, parse_edits, parse_files, record_tests
 from .base import run_command as _run
 
 CASE_ID = "r1b_jhipster_boot3"
@@ -91,6 +91,25 @@ def java_version(pom: str) -> int | None:
 def test_summaries(mvn_output: str) -> list[tuple[int, int, int]]:
     """(run, failures, errors) per surefire/failsafe "Results:" summary, in order."""
     return [(int(r), int(f), int(e)) for r, f, e, _ in _SUMMARY_RE.findall(mvn_output)]
+
+
+def record_maven_tests(res: ScoreResult, sums: list[tuple[int, int, int]]) -> None:
+    """Unit (surefire, first summary) and integration (failsafe, second)
+    counts; a suite with no summary never ran (the build stopped first)."""
+    for i, (kind, expected) in enumerate((("unit", MIN_UNIT), ("integration", MIN_IT))):
+        run, failures, errors = sums[i] if len(sums) > i else (0, 0, 0)
+        if run:
+            record_tests(res, kind, passed=run - failures - errors, total=run)
+        else:
+            record_tests(res, kind, total=expected, ran=False)
+
+
+def record_e2e_tests(res: ScoreResult, totals: tuple[int, int, int] | None) -> None:
+    """Cypress (tests, passing, failing), or not run (None)."""
+    if totals:
+        record_tests(res, "e2e", passed=totals[1], total=totals[0])
+    else:
+        record_tests(res, "e2e", total=MIN_E2E, ran=False)
 
 
 def cypress_totals(output: str) -> tuple[int, int, int] | None:
@@ -185,6 +204,7 @@ def run_e2e(project: Path, res: ScoreResult) -> bool:
                         "--config", f"baseUrl=http://localhost:{port}/"],
                        cwd=FRONTEND, timeout=E2E_TIMEOUT_S, env=env)
         totals = cypress_totals(out)
+        record_e2e_tests(res, totals)
         res.details["e2e_tests"] = ({"tests": totals[0], "passing": totals[1], "failing": totals[2]}
                                     if totals else None)
         res.details["e2e_tail"] = re.sub(r"\x1b\[[0-9;]*m", "", out)[-2000:]
@@ -242,10 +262,13 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
             res.checks["integration_tests"] = rc == 0 and it[0] >= MIN_IT and it[1] == it[2] == 0
             res.details["tests_run"] = {"unit": unit[0], "integration": it[0],
                                         "expected_at_least": [MIN_UNIT, MIN_IT]}
+            record_maven_tests(res, sums)
             errors = [ln for ln in out.splitlines() if ln.startswith("[ERROR]")]
             res.details["build_errors"] = errors[:30]
             res.details["build_tail"] = out[-1500:]
             res.checks["e2e"] = res.checks["build"] and run_e2e(tmp, res)
+            if "e2e" not in res.details.get("tests", {}):
+                record_e2e_tests(res, None)        # the build failed, or the app never served
     finally:
         if shutil.which("docker"):
             _reclaim(tmp)

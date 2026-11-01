@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-01T06:16:23+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-01T07:47:14+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -25,7 +25,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | low | 12/12 | 2/2 | 100% (14/14) | 6/6 | 64.7 | $2.57 |
 | 8 | Claude Haiku 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 72.5 | $4.34 |
 | 9 | Claude Opus 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 76.4 | $14.64 |
-| 10 | GLM-5.3 · opencode | medium | 13/13 | — | 100% (13/13) | 4/6 | 29.4 | $1.98 |
+| 10 | GLM-5.3 · opencode | medium | 13/13 | 1/2 | 93% (14/15) | 6/6 | 113.8 | $24.07 |
 
 ### r1_springboot2to3 — Spring Boot 2 → 3 (small app)
 
@@ -100,6 +100,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 31.3 | 31.3 | 0% | 0% | 100% | 1.29 | $5.23 | $5.23 | 98 | 20261031T190847Z |
 | 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 33.2 | 33.2 | 0% | 0% | 100% | 2.45 | $1.25 | $1.25 | 127 | 20261101T013831Z |
 | 9 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 40.7 | 40.7 | 0% | 0% | 100% | 0.46 | $2.62 | $2.62 | 168 | 20261031T173531Z |
+| 10 | GLM-5.3 · opencode | medium | 0/1 | 0% | 48.8 | n/a | 0% | 0% | 0% | 1.08 | $12.26 | n/a | 245 | 20261101T061953Z |
 
 ### r2_gwt_to_angular — GWT → Angular port
 
@@ -114,6 +115,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 23.9 | 23.9 | 0% | 100% | 100% | 0.73 | $1.91 | $1.91 | 154 | 20261031T135411Z |
 | 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 24.3 | 24.3 | 0% | 100% | 100% | 1.28 | $1.26 | $1.26 | 126 | 20261101T033634Z |
 | 9 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 35.4 | 35.4 | 0% | 0% | 100% | 0.79 | $7.83 | $7.83 | 124 | 20261031T190847Z |
+| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 35.6 | 35.6 | 0% | 0% | 100% | 1.23 | $9.83 | $9.83 | 218 | 20261101T071035Z |
 
 TTFS is the mean wall time of passing attempts; Pass@T the share of attempts that passed within T seconds (agentic budgets: models.yaml `agentic_time_budgets_s`). Tool / model time divides the time tools ran (builds, tests, servers; parallel calls merged) by the time the model spent in API requests (opencode reports none: there it is the model steps' wall time minus the tool time inside them), summed over attempts that measured both; above 1 means the attempt was mostly waiting on builds and tests (docs/METRICS_PLAN.md §8).
 

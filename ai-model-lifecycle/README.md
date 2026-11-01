@@ -57,6 +57,10 @@ claude setup-token        # then add CLAUDE_CODE_OAUTH_TOKEN=... to .env
 python agentic.py --pair sonnet-5.5-cc-vs-deepseek-v4-pro --role current
 python agentic.py --pair sonnet-5.5-cc-vs-deepseek-v4-pro --role current \
     --case r1b_jhipster_boot3 --repeats 3 --time-limit 3600   # -> runs/<pair>/agentic/<run>/REPORT.md
+# open-weight models (OpenCode Go) run in opencode, from the same image;
+# needs OPENCODE_GO_API_KEY in .env
+python agentic.py --pair opus-5.5-cc-vs-glm-5.3 --role target --case sanity \
+    --repeats 3 --max-spend-usd 10
 python leaderboard.py     # agentic ranking first, single-shot screening after it
 
 # run the frozen cases against one pair (writes runs/<pair>/<model>.<case>.json)

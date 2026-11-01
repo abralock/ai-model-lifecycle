@@ -617,8 +617,10 @@ def render_agentic(board: Board) -> list[str]:
     lines += ["Unit, integration and E2E tests show how far an attempt got, even when it "
               "failed: the share of the hidden suite's tests that passed, summed over the "
               "attempts whose suite ran (\"not run\": the build stopped before that suite, "
-              "e.g. a failed build check). E2E is the browser suite (Cypress for r1b, the "
-              "Playwright parity suite for r2). Pass rate stays the official result: an "
+              "e.g. a failed build check). Integration is the failsafe suite for r1b and, for "
+              "r2, the UI-vs-API suite (each UI action checked against the REST API). E2E "
+              "is the browser suite (Cypress for r1b, the Playwright parity suite for r2). "
+              "Pass rate stays the official result: an "
               "attempt passes only if every check passes.", "",
               "TTFS is the mean wall time of passing attempts; Pass@T the share of attempts "
               "that passed within T seconds (agentic budgets: models.yaml "

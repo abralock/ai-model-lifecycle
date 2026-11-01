@@ -14,7 +14,13 @@ under src/app/. Then:
     App Engine dev server running the GWT war, which also serves the REST API
     at /api), seeded fresh, and the hidden Playwright parity suite
     (scorers/fixtures/r2_parity/, 8 tests ported from the app's Cucumber
-    features) runs against it. All 8 must pass. A failed test gets one
+    features) runs against it. All 8 must pass;
+  * integration: on a second freshly seeded server, the hidden suite
+    fixtures/r2_parity/integration.spec.ts (7 tests) checks every UI action
+    against the backend through the REST API (/api): what the tables show,
+    and that adds, edits and deletes are really saved. All 7 must pass.
+    A port that only changed its tables in the browser passes parity but
+    fails here. A failed test gets one
     retry; a pass on the retry counts ("flaky", listed in
     details["parity_flaky"]), and tests that fail both tries are listed in
     details["parity_failed"].
@@ -56,6 +62,16 @@ JAVA8_IMAGE = os.environ.get("R2_JAVA8_IMAGE", "maven:3.8-openjdk-8")
 FIXED_FILES = ("package.json", "package-lock.json", "angular.json", "tsconfig.json",
                "tsconfig.app.json", "src/main.ts", "src/index.html")
 MIN_PARITY = 8
+# The integration suite (fixtures/r2_parity/integration.spec.ts): each UI
+# action is checked against the backend through the REST API, so a port that
+# only changes its tables in the browser fails. 7 tests.
+MIN_INTEGRATION = 7
+# name -> (spec file, tests expected, kind for record_tests). Each suite runs
+# against its own freshly seeded server: their data changes must not meet
+# (the integration suite's adds and deletes broke the parity suite's Reports
+# test even on the GWT original when they shared one).
+SUITES = {"parity": ("parity.spec.ts", MIN_PARITY, "e2e"),
+          "integration": ("integration.spec.ts", MIN_INTEGRATION, "integration")}
 BUILD_TIMEOUT_S, PARITY_TIMEOUT_S = 900, 900
 
 
@@ -106,8 +122,10 @@ def build_angular(ws: Path, res: ScoreResult) -> Path | None:
     return dist
 
 
-def run_parity(base_path: str, angular_dist: Path | None, res: ScoreResult) -> bool:
-    """Serve the GWT war (+ the Angular build at /ng/) fresh, run the parity suite."""
+def run_suite(suite: str, base_path: str, angular_dist: Path | None, res: ScoreResult) -> bool:
+    """Serve the GWT war (+ the Angular build at /ng/) fresh and run one hidden
+    Playwright suite (SUITES) against it; record its counts and test names."""
+    spec, expected, kind = SUITES[suite]
     work = Path(tempfile.mkdtemp(prefix="r2_serve_"))
     name = f"r2-gae-{uuid.uuid4().hex[:8]}"
     run_dir = CACHE / "e2e" / f"run-{uuid.uuid4().hex[:8]}"   # under e2e/ so @playwright/test resolves
@@ -123,33 +141,46 @@ def run_parity(base_path: str, angular_dist: Path | None, res: ScoreResult) -> b
                         "bash", "/sdk/appengine-java-sdk-1.9.17/bin/dev_appserver.sh",
                         "--address=0.0.0.0", "--port=8888", "/war"])
         if rc != 0:
-            res.details["parity"] = f"could not start the app server: {out[-300:]}"
+            res.details[suite] = f"could not start the app server: {out[-300:]}"
             return False
         base_url = f"http://127.0.0.1:{port}{base_path}"
         if not _wait_http(f"http://127.0.0.1:{port}/api/manufacturers", 120) or not _wait_http(base_url, 30):
-            res.details["parity"] = f"app server not ready at {base_url}"
+            res.details[suite] = f"app server not ready at {base_url}"
             return False
 
         shutil.copytree(PARITY, run_dir)
         report = run_dir / "report.json"
         env = dict(os.environ, BASE_URL=base_url, PARITY_REPORT=str(report))
-        rc, out = _run(["npx", "playwright", "test", "--config", str(run_dir / "playwright.config.ts")],
+        rc, out = _run(["npx", "playwright", "test", str(run_dir / spec),
+                        "--config", str(run_dir / "playwright.config.ts")],
                        cwd=CACHE / "e2e", timeout=PARITY_TIMEOUT_S, env=env)
-        res.details["parity_tail"] = out[-2500:]
+        res.details[f"{suite}_tail"] = out[-2500:]
         passed, failed = parity_counts(report)
-        record_parity_tests(res, passed=passed, failed=failed)
         outcomes = parity_outcomes(report)
-        res.details["parity_tests"] = {"passed": passed, "failed": failed,
-                                       "flaky": len(outcomes["flaky"]), "expected": MIN_PARITY}
+        # out of every test in the suite: one skipped after a failure in its
+        # serial group counts as not passed
+        record_tests(res, kind, passed=passed, total=max(expected, passed + failed))
+        res.details[f"{suite}_tests"] = {"passed": passed, "failed": failed,
+                                         "flaky": len(outcomes["flaky"]), "expected": expected}
         if outcomes["failed"]:
-            res.details["parity_failed"] = outcomes["failed"]
+            res.details[f"{suite}_failed"] = outcomes["failed"]
         if outcomes["flaky"]:
-            res.details["parity_flaky"] = outcomes["flaky"]
-        return rc == 0 and failed == 0 and passed >= MIN_PARITY
+            res.details[f"{suite}_flaky"] = outcomes["flaky"]
+        return rc == 0 and failed == 0 and passed >= expected
     finally:
         _run(["docker", "rm", "-f", name])
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def run_parity(base_path: str, angular_dist: Path | None, res: ScoreResult) -> bool:
+    """The parity (e2e) suite on its own fresh server."""
+    return run_suite("parity", base_path, angular_dist, res)
+
+
+def run_integration(base_path: str, angular_dist: Path | None, res: ScoreResult) -> bool:
+    """The integration (UI vs REST API) suite on its own fresh server."""
+    return run_suite("integration", base_path, angular_dist, res)
 
 
 def record_parity_tests(res: ScoreResult, *, passed: int, failed: int, ran: bool = True) -> None:
@@ -228,40 +259,47 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
         problem = cache_problem()
         if problem:
             res.details["cache"] = problem
-            res.checks["build"] = res.checks["parity"] = False
+            res.checks["build"] = res.checks["parity"] = res.checks["integration"] = False
         else:
             dist = build_angular(ws, res)
             res.checks["build"] = dist is not None
             res.checks["parity"] = dist is not None and run_parity("/ng/", dist, res)
+            res.checks["integration"] = dist is not None and run_integration("/ng/", dist, res)
             if dist is None:
                 record_parity_tests(res, passed=0, failed=0, ran=False)
+                record_tests(res, "integration", total=MIN_INTEGRATION, ran=False)
     finally:
         if not workdir:
             shutil.rmtree(ws, ignore_errors=True)
 
-    required = ["edits_applied", "has_app", "build", "parity"]
+    required = ["edits_applied", "has_app", "build", "parity", "integration"]
     res.passed = all(res.checks.get(k, False) for k in required)
     res.score = sum(bool(res.checks.get(k)) for k in required) / len(required)
     if res.passed:
-        res.reason = f"Angular port builds and passes all {MIN_PARITY} parity tests"
+        res.reason = (f"Angular port builds, passes all {MIN_PARITY} parity tests and all "
+                      f"{MIN_INTEGRATION} UI-vs-API integration tests")
     else:
         failed = [k for k in required if not res.checks.get(k)]
         res.reason = "failed checks: " + ", ".join(failed)
         if pt := res.details.get("parity_tests"):
             res.reason += f" (parity {pt['passed']} passed, {pt['failed']} failed)"
+        if it := res.details.get("integration_tests"):
+            res.reason += f" (integration {it['passed']} passed, {it['failed']} failed)"
         if "cache" in res.details:
             res.reason += " (unverified: " + res.details["cache"] + ")"
     return res
 
 
 def baseline() -> int:
-    """Run the parity suite against the original GWT app (validates the suite)."""
+    """Run the parity and integration suites against the original GWT app
+    (validates the suites)."""
     res = ScoreResult(case_id=CASE_ID, model_slug="gwt-original")
     problem = cache_problem()
     if problem:
         print(problem, file=sys.stderr)
         return 1
     ok = run_parity("/", None, res)
+    ok = run_integration("/", None, res) and ok
     print(json.dumps({"passed": ok, **res.details}, indent=2))
     return 0 if ok else 1
 

@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-01T07:47:14+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-01T13:17:52+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -29,18 +29,18 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 
 ### r1_springboot2to3 — Spring Boot 2 → 3 (small app)
 
-| # | Model | Thinking level | Passed | Pass rate | Mean time (min) | TTFS (min) | Pass@120s | Pass@300s | Pass@600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
-|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | Claude Sonnet 5.5 (CC) | low | 3/3 | 100% | 0.4 | 0.4 | 100% | 100% | 100% | 0.16 | $0.07 | $0.07 | 6 | 20261101T003616Z |
-| 2 | Claude Sonnet 5.5 (CC) | high | 3/3 | 100% | 0.5 | 0.5 | 100% | 100% | 100% | 0.17 | $0.08 | $0.08 | 5 | 20261031T160419Z |
-| 3 | Claude Opus 5.5 (CC) | low | 3/3 | 100% | 0.7 | 0.7 | 100% | 100% | 100% | 0.20 | $0.17 | $0.17 | 7 | 20261101T024018Z |
-| 4 | Claude Sonnet 5.5 (CC) | medium | 3/3 | 100% | 0.8 | 0.8 | 100% | 100% | 100% | 1.30 | $0.07 | $0.07 | 5 | 20261031T120615Z |
-| 5 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 1.1 | 1.1 | 100% | 100% | 100% | 0.22 | $0.25 | $0.25 | 8 | 20261031T123749Z |
-| 6 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 1.6 | 1.6 | 67% | 100% | 100% | 0.15 | $0.36 | $0.36 | 11 | 20261031T183901Z |
-| 7 | GLM-5.3 · opencode | medium | 3/3 | 100% | 2.3 | 2.3 | 67% | 100% | 100% | 0.29 | $0.14 | $0.14 | 14 | 20261101T044458Z |
-| 8 | Claude Haiku 5.5 (CC) | low | 3/3 | 100% | 2.9 | 2.9 | 0% | 100% | 100% | 2.13 | $0.02 | $0.02 | 16 | 20261101T011617Z |
-| 9 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 2.9 | 2.9 | 0% | 100% | 100% | 1.55 | $0.02 | $0.02 | 16 | 20261031T121809Z |
-| 10 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 5.1 | 5.1 | 0% | 33% | 100% | 1.62 | $0.03 | $0.03 | 24 | 20261031T165728Z |
+| # | Model | Thinking level | Passed | Pass rate | Unit tests | Mean time (min) | TTFS (min) | Pass@120s | Pass@300s | Pass@600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | Claude Sonnet 5.5 (CC) | low | 3/3 | 100% | 100% (12/12) | 0.4 | 0.4 | 100% | 100% | 100% | 0.16 | $0.07 | $0.07 | 6 | 20261101T003616Z |
+| 2 | Claude Sonnet 5.5 (CC) | high | 3/3 | 100% | 100% (12/12) | 0.5 | 0.5 | 100% | 100% | 100% | 0.17 | $0.08 | $0.08 | 5 | 20261031T160419Z |
+| 3 | Claude Opus 5.5 (CC) | low | 3/3 | 100% | 100% (12/12) | 0.7 | 0.7 | 100% | 100% | 100% | 0.20 | $0.17 | $0.17 | 7 | 20261101T024018Z |
+| 4 | Claude Sonnet 5.5 (CC) | medium | 3/3 | 100% | 100% (12/12) | 0.8 | 0.8 | 100% | 100% | 100% | 1.30 | $0.07 | $0.07 | 5 | 20261031T120615Z |
+| 5 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 100% (12/12) | 1.1 | 1.1 | 100% | 100% | 100% | 0.22 | $0.25 | $0.25 | 8 | 20261031T123749Z |
+| 6 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 100% (12/12) | 1.6 | 1.6 | 67% | 100% | 100% | 0.15 | $0.36 | $0.36 | 11 | 20261031T183901Z |
+| 7 | GLM-5.3 · opencode | medium | 3/3 | 100% | 100% (12/12) | 2.3 | 2.3 | 67% | 100% | 100% | 0.29 | $0.14 | $0.14 | 14 | 20261101T044458Z |
+| 8 | Claude Haiku 5.5 (CC) | low | 3/3 | 100% | 100% (12/12) | 2.9 | 2.9 | 0% | 100% | 100% | 2.13 | $0.02 | $0.02 | 16 | 20261101T011617Z |
+| 9 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 100% (12/12) | 2.9 | 2.9 | 0% | 100% | 100% | 1.55 | $0.02 | $0.02 | 16 | 20261031T121809Z |
+| 10 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 100% (12/12) | 5.1 | 5.1 | 0% | 33% | 100% | 1.62 | $0.03 | $0.03 | 24 | 20261031T165728Z |
 
 ### r3_oracle_to_postgres — Oracle → PostgreSQL procedures
 
@@ -89,33 +89,35 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 
 ### r1b_jhipster_boot3 — JHipster app → Spring Boot 3 / Java 17
 
-| # | Model | Thinking level | Passed | Pass rate | Mean time (min) | TTFS (min) | Pass@900s | Pass@1800s | Pass@3600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
-|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | Claude Sonnet 5.5 (CC) | low | 1/1 | 100% | 16.1 | 16.1 | 0% | 100% | 100% | 3.17 | $0.99 | $0.99 | 64 | 20261101T005111Z |
-| 2 | Claude Opus 5.5 (CC) | medium | 1/1 | 100% | 17.2 | 17.2 | 0% | 100% | 100% | 2.09 | $3.29 | $3.29 | 75 | 20261031T145008Z |
-| 3 | Claude Opus 5.5 (CC) | low | 1/1 | 100% | 17.8 | 17.8 | 0% | 100% | 100% | 3.13 | $1.71 | $1.71 | 57 | 20261101T024937Z |
-| 4 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 25.8 | 25.8 | 0% | 100% | 100% | 3.98 | $1.28 | $1.28 | 70 | 20261031T130029Z |
-| 5 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 27.8 | 27.8 | 0% | 100% | 100% | 3.73 | $1.39 | $1.39 | 76 | 20261031T161435Z |
-| 6 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 28.6 | 28.6 | 0% | 100% | 100% | 1.42 | $1.38 | $1.38 | 131 | 20261031T135411Z |
-| 7 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 31.3 | 31.3 | 0% | 0% | 100% | 1.29 | $5.23 | $5.23 | 98 | 20261031T190847Z |
-| 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 33.2 | 33.2 | 0% | 0% | 100% | 2.45 | $1.25 | $1.25 | 127 | 20261101T013831Z |
-| 9 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 40.7 | 40.7 | 0% | 0% | 100% | 0.46 | $2.62 | $2.62 | 168 | 20261031T173531Z |
-| 10 | GLM-5.3 · opencode | medium | 0/1 | 0% | 48.8 | n/a | 0% | 0% | 0% | 1.08 | $12.26 | n/a | 245 | 20261101T061953Z |
+| # | Model | Thinking level | Passed | Pass rate | Unit tests | Integration tests | E2E tests | Mean time (min) | TTFS (min) | Pass@900s | Pass@1800s | Pass@3600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | Claude Sonnet 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 16.1 | 16.1 | 0% | 100% | 100% | 3.17 | $0.99 | $0.99 | 64 | 20261101T005111Z |
+| 2 | Claude Opus 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 17.2 | 17.2 | 0% | 100% | 100% | 2.09 | $3.29 | $3.29 | 75 | 20261031T145008Z |
+| 3 | Claude Opus 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 17.8 | 17.8 | 0% | 100% | 100% | 3.13 | $1.71 | $1.71 | 57 | 20261101T024937Z |
+| 4 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 25.8 | 25.8 | 0% | 100% | 100% | 3.98 | $1.28 | $1.28 | 70 | 20261031T130029Z |
+| 5 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 27.8 | 27.8 | 0% | 100% | 100% | 3.73 | $1.39 | $1.39 | 76 | 20261031T161435Z |
+| 6 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 28.6 | 28.6 | 0% | 100% | 100% | 1.42 | $1.38 | $1.38 | 131 | 20261031T135411Z |
+| 7 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 31.3 | 31.3 | 0% | 0% | 100% | 1.29 | $5.23 | $5.23 | 98 | 20261031T190847Z |
+| 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 33.2 | 33.2 | 0% | 0% | 100% | 2.45 | $1.25 | $1.25 | 127 | 20261101T013831Z |
+| 9 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 40.7 | 40.7 | 0% | 0% | 100% | 0.46 | $2.62 | $2.62 | 168 | 20261031T173531Z |
+| 10 | GLM-5.3 · opencode | medium | 0/1 | 0% | 100% (52/52) | not run | not run | 48.8 | n/a | 0% | 0% | 0% | 1.08 | $12.26 | n/a | 245 | 20261101T061953Z |
 
 ### r2_gwt_to_angular — GWT → Angular port
 
-| # | Model | Thinking level | Passed | Pass rate | Mean time (min) | TTFS (min) | Pass@900s | Pass@1800s | Pass@3600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
-|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | Claude Sonnet 5.5 (CC) | low | 1/1 | 100% | 5.5 | 5.5 | 100% | 100% | 100% | 0.63 | $0.68 | $0.68 | 38 | 20261101T005111Z |
-| 2 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 7.9 | 7.9 | 100% | 100% | 100% | 0.53 | $1.01 | $1.01 | 54 | 20261031T133909Z |
-| 3 | Claude Opus 5.5 (CC) | medium | 1/1 | 100% | 9.3 | 9.3 | 100% | 100% | 100% | 0.32 | $2.65 | $2.65 | 41 | 20261031T153844Z |
-| 4 | Claude Opus 5.5 (CC) | low | 1/1 | 100% | 10.6 | 10.6 | 100% | 100% | 100% | 1.28 | $1.60 | $1.60 | 36 | 20261101T024937Z |
-| 5 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 11.5 | 11.5 | 100% | 100% | 100% | 1.35 | $1.10 | $1.10 | 52 | 20261031T161435Z |
-| 6 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 19.3 | 19.3 | 0% | 100% | 100% | 0.64 | $1.62 | $1.62 | 106 | 20261031T173531Z |
-| 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 23.9 | 23.9 | 0% | 100% | 100% | 0.73 | $1.91 | $1.91 | 154 | 20261031T135411Z |
-| 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 24.3 | 24.3 | 0% | 100% | 100% | 1.28 | $1.26 | $1.26 | 126 | 20261101T033634Z |
-| 9 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 35.4 | 35.4 | 0% | 0% | 100% | 0.79 | $7.83 | $7.83 | 124 | 20261031T190847Z |
-| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 35.6 | 35.6 | 0% | 0% | 100% | 1.23 | $9.83 | $9.83 | 218 | 20261101T071035Z |
+| # | Model | Thinking level | Passed | Pass rate | E2E tests | Mean time (min) | TTFS (min) | Pass@900s | Pass@1800s | Pass@3600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | Claude Sonnet 5.5 (CC) | low | 1/1 | 100% | 100% (8/8) | 5.5 | 5.5 | 100% | 100% | 100% | 0.63 | $0.68 | $0.68 | 38 | 20261101T005111Z |
+| 2 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 100% (8/8) | 7.9 | 7.9 | 100% | 100% | 100% | 0.53 | $1.01 | $1.01 | 54 | 20261031T133909Z |
+| 3 | Claude Opus 5.5 (CC) | medium | 1/1 | 100% | 100% (8/8) | 9.3 | 9.3 | 100% | 100% | 100% | 0.32 | $2.65 | $2.65 | 41 | 20261031T153844Z |
+| 4 | Claude Opus 5.5 (CC) | low | 1/1 | 100% | 100% (8/8) | 10.6 | 10.6 | 100% | 100% | 100% | 1.28 | $1.60 | $1.60 | 36 | 20261101T024937Z |
+| 5 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 100% (8/8) | 11.5 | 11.5 | 100% | 100% | 100% | 1.35 | $1.10 | $1.10 | 52 | 20261031T161435Z |
+| 6 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 100% (8/8) | 19.3 | 19.3 | 0% | 100% | 100% | 0.64 | $1.62 | $1.62 | 106 | 20261031T173531Z |
+| 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (8/8) | 23.9 | 23.9 | 0% | 100% | 100% | 0.73 | $1.91 | $1.91 | 154 | 20261031T135411Z |
+| 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (8/8) | 24.3 | 24.3 | 0% | 100% | 100% | 1.28 | $1.26 | $1.26 | 126 | 20261101T033634Z |
+| 9 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (8/8) | 35.4 | 35.4 | 0% | 0% | 100% | 0.79 | $7.83 | $7.83 | 124 | 20261031T190847Z |
+| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 100% (8/8) | 35.6 | 35.6 | 0% | 0% | 100% | 1.23 | $9.83 | $9.83 | 218 | 20261101T071035Z |
+
+Unit, integration and E2E tests show how far an attempt got, even when it failed: the share of the hidden suite's tests that passed, summed over the attempts whose suite ran ("not run": the build stopped before that suite, e.g. a failed build check). E2E is the browser suite (Cypress for r1b, the Playwright parity suite for r2). Pass rate stays the official result: an attempt passes only if every check passes.
 
 TTFS is the mean wall time of passing attempts; Pass@T the share of attempts that passed within T seconds (agentic budgets: models.yaml `agentic_time_budgets_s`). Tool / model time divides the time tools ran (builds, tests, servers; parallel calls merged) by the time the model spent in API requests (opencode reports none: there it is the model steps' wall time minus the tool time inside them), summed over attempts that measured both; above 1 means the attempt was mostly waiting on builds and tests (docs/METRICS_PLAN.md §8).
 

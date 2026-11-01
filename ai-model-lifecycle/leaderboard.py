@@ -119,6 +119,11 @@ class Board:
     agentic_budgets: dict[str, list[float]] = field(default_factory=dict)
 
 
+# Hidden test suites a scorer reports per kind (scorers.base.record_tests), in
+# column order, with their column titles.
+TEST_KINDS = {"unit": "Unit tests", "integration": "Integration tests", "e2e": "E2E tests"}
+
+
 @dataclass
 class AgenticTask:
     """One model's agentic attempts on one task (docs/METRICS_PLAN.md §8)."""
@@ -129,10 +134,32 @@ class AgenticTask:
     model_s: float = 0.0            # model (API) time over the same attempts
     timed: int = 0
     runs: set[str] = field(default_factory=set)     # the runs these attempts came from
+    # per test kind (unit, integration, e2e): tests passed and run, summed over
+    # the attempts whose suite ran, and the number of attempts where it never ran
+    tests: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def attempts(self) -> int:
         return len(self.outcomes)
+
+    def add_tests(self, tests: dict | None) -> None:
+        for kind, t in (tests or {}).items():
+            agg = self.tests.setdefault(kind, {"passed": 0, "total": 0, "not_run": 0})
+            if t.get("ran"):
+                agg["passed"] += int(t.get("passed") or 0)
+                agg["total"] += int(t.get("total") or 0)
+            else:
+                agg["not_run"] += 1
+
+    def tests_cell(self, kind: str) -> str:
+        """e.g. "100% (52/52)", "not run", "98% (153/156) · 1 not run", or "—"."""
+        agg = self.tests.get(kind)
+        if not agg:
+            return "—"
+        if not agg["total"]:
+            return "not run" if agg["not_run"] else "—"
+        cell = f"{agg['passed'] / agg['total'] * 100:.0f}% ({agg['passed']}/{agg['total']})"
+        return cell + (f" · {agg['not_run']} not run" if agg["not_run"] else "")
 
     @property
     def passes(self) -> int:
@@ -228,8 +255,13 @@ def agentic_rows(cases: list[str], *, score: bool, scorer=None,
                 continue
             task = row.by_case[case] = AgenticTask()
             for r in ran:
-                ok = (bool((scorer or score_case)(case, r.get("output_text") or "", slug).passed)
-                      if score else bool(r.get("passed")))
+                if score:
+                    sr = (scorer or score_case)(case, r.get("output_text") or "", slug)
+                    ok = bool(sr.passed)
+                    task.add_tests(getattr(sr, "tests", None)
+                                   or (getattr(sr, "details", None) or {}).get("tests"))
+                else:
+                    ok = bool(r.get("passed"))
                 task.outcomes.append((float(r.get("latency_s") or 0), ok))
                 task.runs.add(r["_run"])
                 task.cost_usd += float(r.get("cost_estimate_usd") or 0)
@@ -562,7 +594,9 @@ def render_agentic(board: Board) -> list[str]:
             if not ranked:
                 lines += ["_No agentic results for this task yet._", ""]
                 continue
-            header = ["#", "Model", "Thinking level", "Passed", "Pass rate", "Mean time (min)",
+            kinds = [k for k in TEST_KINDS if any(k in t.tests for _, t in ranked)]
+            header = ["#", "Model", "Thinking level", "Passed", "Pass rate",
+                      *[TEST_KINDS[k] for k in kinds], "Mean time (min)",
                       "TTFS (min)", *[f"Pass@{b:g}s" for b in budgets], "Tool / model time",
                       "Mean cost", "Cost / pass", "Mean turns", "Runs"]
             lines += ["| " + " | ".join(header) + " |",
@@ -570,7 +604,8 @@ def render_agentic(board: Board) -> list[str]:
             for i, (row, t) in enumerate(ranked, 1):
                 ttfs, ratio = t.ttfs_s, t.tool_model_ratio
                 cells = [str(i), row.name, row.level, f"{t.passes}/{t.attempts}",
-                         f"{t.rate * 100:.0f}%", f"{t.mean_time_s / 60:.1f}",
+                         f"{t.rate * 100:.0f}%", *[t.tests_cell(k) for k in kinds],
+                         f"{t.mean_time_s / 60:.1f}",
                          "n/a" if ttfs is None else f"{ttfs / 60:.1f}",
                          *[f"{t.pass_at(b) * 100:.0f}%" for b in budgets],
                          "n/a" if ratio is None else f"{ratio:.2f}",
@@ -579,7 +614,13 @@ def render_agentic(board: Board) -> list[str]:
                          f"{t.turns / t.attempts:.0f}", ", ".join(sorted(t.runs))]
                 lines.append("| " + " | ".join(cells) + " |")
             lines.append("")
-    lines += ["TTFS is the mean wall time of passing attempts; Pass@T the share of attempts "
+    lines += ["Unit, integration and E2E tests show how far an attempt got, even when it "
+              "failed: the share of the hidden suite's tests that passed, summed over the "
+              "attempts whose suite ran (\"not run\": the build stopped before that suite, "
+              "e.g. a failed build check). E2E is the browser suite (Cypress for r1b, the "
+              "Playwright parity suite for r2). Pass rate stays the official result: an "
+              "attempt passes only if every check passes.", "",
+              "TTFS is the mean wall time of passing attempts; Pass@T the share of attempts "
               "that passed within T seconds (agentic budgets: models.yaml "
               "`agentic_time_budgets_s`). Tool / model time divides the time tools ran "
               "(builds, tests, servers; parallel calls merged) by the time the model spent in "

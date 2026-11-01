@@ -508,3 +508,42 @@ def test_changed_case_source_is_refused(tmp_path, monkeypatch):
     with pytest.raises(sources.SourceError, match="differ from the pinned fork commit"):
         sources.ensure("c")
     sources.ensure("not_locked")                           # sanity cases: nothing to do
+
+
+# --------------------------------------------------------------------------- #
+# test counts per kind (details["tests"]): partial results for reports         #
+# --------------------------------------------------------------------------- #
+def test_r1b_records_unit_and_integration_counts_and_suites_that_never_ran():
+    res = r1b_scorer.ScoreResult(case_id="r1b_jhipster_boot3")
+    # surefire ran 52 (1 failure, 1 error); the build then stopped before failsafe
+    r1b_scorer.record_maven_tests(res, [(52, 1, 1)])
+    assert res.details["tests"] == {
+        "unit": {"passed": 50, "total": 52, "ran": True},
+        "integration": {"passed": 0, "total": 140, "ran": False}}
+
+
+def test_r1b_records_e2e_counts_or_not_run():
+    res = r1b_scorer.ScoreResult(case_id="r1b_jhipster_boot3")
+    r1b_scorer.record_e2e_tests(res, (54, 53, 1))
+    assert res.details["tests"]["e2e"] == {"passed": 53, "total": 54, "ran": True}
+    r1b_scorer.record_e2e_tests(res, None)
+    assert res.details["tests"]["e2e"] == {"passed": 0, "total": 54, "ran": False}
+
+
+def test_r2_records_parity_as_e2e_and_counts_skipped_tests_as_not_passed():
+    res = r2_scorer.ScoreResult(case_id="r2_gwt_to_angular")
+    r2_scorer.record_parity_tests(res, passed=6, failed=1)      # 1 skipped after a failure
+    assert res.details["tests"]["e2e"] == {"passed": 6, "total": 8, "ran": True}
+    r2_scorer.record_parity_tests(res, passed=0, failed=0, ran=False)
+    assert res.details["tests"]["e2e"] == {"passed": 0, "total": 8, "ran": False}
+
+
+def test_r1_records_hidden_test_counts_from_surefire():
+    from scorers import r1_scorer
+    res = r1_scorer.ScoreResult(case_id="r1_springboot2to3")
+    out = "[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0\n[INFO] Tests run: 9, Failures: 1, Errors: 0, Skipped: 0\n"
+    r1_scorer.record_hidden_tests(res, out)
+    assert res.details["tests"]["unit"] == {"passed": 8, "total": 9, "ran": True}
+    r1_scorer.record_hidden_tests(res, None)
+    assert res.details["tests"]["unit"] == {"passed": 0, "total": r1_scorer.expected_test_count(),
+                                            "ran": False}

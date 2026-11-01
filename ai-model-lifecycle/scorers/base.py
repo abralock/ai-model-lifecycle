@@ -522,5 +522,16 @@ def cli(score_fn, argv: list[str] | None = None) -> int:
     return 0 if result.passed else 1
 
 
+def record_tests(res: ScoreResult, kind: str, *, passed: int = 0, total: int = 0,
+                 ran: bool = True) -> None:
+    """Per-kind test counts for reports (details["tests"][kind]: unit,
+    integration, e2e), so a failed attempt still shows how far it got, e.g.
+    unit 52/52 passed while the build stopped before the integration suite.
+    A suite that never ran is recorded with ran=False and the number of tests
+    it would have run."""
+    res.details.setdefault("tests", {})[kind] = {
+        "passed": int(passed), "total": int(total), "ran": bool(ran)}
+
+
 if __name__ == "__main__":  # pragma: no cover
     print("scorers.base is a library module", file=sys.stderr)

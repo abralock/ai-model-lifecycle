@@ -593,3 +593,50 @@ def test_opencode_rows_are_labelled_and_never_pooled_with_claude_code(runs):
                      ("GLM-5.3 · opencode", "opencode")]
     md = leaderboard.render(leaderboard.build(score=False))
     assert "| GLM-5.3 · opencode |" in md and "both the model and the agent" in md
+
+
+def test_score_cache_keeps_per_kind_test_counts(tmp_path):
+    from score_cache import ScoreCache
+    calls = []
+
+    def scorer(case_id, text, slug):
+        calls.append(case_id)
+        return SimpleNamespace(passed=False, reason="failed checks: build", details={"tests": {
+            "unit": {"passed": 52, "total": 52, "ran": True},
+            "integration": {"passed": 0, "total": 140, "ran": False}}})
+
+    cache = ScoreCache(tmp_path / "cache.json", scorer=scorer)
+    first = cache("r1b_jhipster_boot3", "answer", "m")
+    again = ScoreCache(tmp_path / "cache.json", scorer=scorer)("r1b_jhipster_boot3", "answer", "m")
+    assert len(calls) == 1
+    assert first.tests == again.tests and again.tests["unit"]["passed"] == 52
+
+
+def test_task_tables_show_test_pass_rates_and_suites_that_never_ran(runs):
+    """A failed attempt still shows how far it got: unit 52/52 passed, the
+    integration and e2e suites never ran. Tables without tests get no columns."""
+    r1b, r3 = "r1b_jhipster_boot3", "r3_oracle_to_postgres"
+    _agentic("a-vs-b", "20261101T000000Z", "glm", r1b, passed=False, name="GLM")
+    _agentic("a-vs-b", "20261101T000000Z", "haiku", r1b, name="Haiku")
+    _agentic("a-vs-b", "20261101T000000Z", "haiku", r3, name="Haiku")
+    full = {"unit": {"passed": 52, "total": 52, "ran": True},
+            "integration": {"passed": 140, "total": 140, "ran": True},
+            "e2e": {"passed": 54, "total": 54, "ran": True}}
+    stopped = {"unit": {"passed": 52, "total": 52, "ran": True},
+               "integration": {"passed": 0, "total": 140, "ran": False},
+               "e2e": {"passed": 0, "total": 54, "ran": False}}
+
+    def scorer(case_id, text, slug):
+        tests = None if case_id == r3 else (full if text == "PASS" else stopped)
+        return SimpleNamespace(passed=text == "PASS", reason="", tests=tests)
+
+    md = leaderboard.render(leaderboard.build(score=True, scorer=scorer))
+    r1b_section = md.split(f"### {r1b}")[1].split("###")[0]
+    assert "| Unit tests | Integration tests | E2E tests |" in r1b_section
+    glm = next(ln for ln in r1b_section.splitlines() if "| GLM |" in ln)
+    assert "| 100% (52/52) | not run | not run |" in glm
+    haiku = next(ln for ln in r1b_section.splitlines() if "| Haiku |" in ln)
+    assert "| 100% (52/52) | 100% (140/140) | 100% (54/54) |" in haiku
+    r3_section = md.split(f"### {r3}")[1].split("###")[0]
+    assert "Unit tests" not in r3_section
+    assert "how far an attempt got" in md

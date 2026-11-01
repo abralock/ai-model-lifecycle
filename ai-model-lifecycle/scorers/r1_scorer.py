@@ -38,7 +38,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .base import ScoreResult, cli, parse_deletes, parse_files, write_files
+from .base import ScoreResult, cli, parse_deletes, parse_files, record_tests, write_files
 
 CASE_ID = "r1_springboot2to3"
 CASE_DIR = Path(__file__).resolve().parent.parent / "cases" / CASE_ID
@@ -63,6 +63,18 @@ def tests_run(mvn_output: str) -> int:
     """Total tests run per the final surefire summary line (0 if none found)."""
     hits = _SUREFIRE_RE.findall(mvn_output)
     return int(hits[-1][0]) if hits else 0
+
+
+def record_hidden_tests(res: ScoreResult, mvn_output: str | None) -> None:
+    """The hidden JUnit 5 suite as the unit count, from surefire's final
+    summary; None (or no summary) = it never ran."""
+    hits = _SUREFIRE_RE.findall(mvn_output or "")
+    if hits:
+        run, failures, errors = (int(x) for x in hits[-1])
+        if run:
+            record_tests(res, "unit", passed=run - failures - errors, total=run)
+            return
+    record_tests(res, "unit", total=expected_test_count(), ran=False)
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 900) -> tuple[int, str]:
@@ -180,11 +192,13 @@ def score(output_text: str, *, model_slug: str = "", workdir: Path | None = None
                 shutil.copytree(HIDDEN_TESTS, test_root, copy_function=shutil.copy)
                 rc_h, out_h = _run(mvn + ["test"], tmp)
                 ran_h = tests_run(out_h)
+                record_hidden_tests(res, out_h)
                 res.checks["hidden_tests"] = rc_h == 0 and ran_h >= expected_test_count()
                 res.details["hidden_tests_run"] = ran_h
                 res.details["hidden_test_tail"] = out_h[-1500:]
             else:
                 res.checks["hidden_tests"] = False
+                record_hidden_tests(res, None)     # did not compile
     finally:
         if not workdir:
             shutil.rmtree(tmp, ignore_errors=True)

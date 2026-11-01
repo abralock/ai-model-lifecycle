@@ -225,9 +225,40 @@ def test_r2_parity_counts(tmp_path):
     report = tmp_path / "report.json"
     report.write_text(json.dumps({"stats": {"expected": 7, "unexpected": 1, "flaky": 0}}))
     assert r2_scorer.parity_counts(report) == (7, 1)
-    report.write_text(json.dumps({"stats": {"expected": 8, "unexpected": 0, "flaky": 1}}))
-    assert r2_scorer.parity_counts(report) == (8, 1)                    # flaky counts as a failure
+    # Playwright's "flaky": failed, then passed on its one retry. A pass, not a
+    # failure: one flaky failure in seven scorings once failed a working port
+    # (GLM-5.3 r2, 2026-11-01). Which tests were flaky is recorded separately.
+    report.write_text(json.dumps({"stats": {"expected": 7, "unexpected": 0, "flaky": 1}}))
+    assert r2_scorer.parity_counts(report) == (8, 0)
     assert r2_scorer.parity_counts(tmp_path / "missing.json") == (0, 0)
+
+
+def _pw_spec(title, status, retries=0):
+    return {"title": title, "tests": [{"status": status,
+                                       "results": [{"retry": i} for i in range(retries + 1)]}]}
+
+
+def test_r2_parity_names_the_failed_and_flaky_tests(tmp_path):
+    """Playwright's JSON report nests suites (file > describe > spec); the
+    scorer records which tests failed and which passed only on their retry."""
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"stats": {"expected": 6, "unexpected": 1, "flaky": 1}, "suites": [
+        {"title": "parity.spec.ts", "specs": [_pw_spec("Reports show the average", "expected")],
+         "suites": [
+             {"title": "Manufacturers", "specs": [
+                 _pw_spec("add then save appends the manufacturer", "flaky", retries=1),
+                 _pw_spec("editing the first manufacturer updates it", "expected")]},
+             {"title": "Ratings", "specs": [
+                 _pw_spec("deleting the first rating removes a row", "unexpected", retries=1)]}]}]}))
+    assert r2_scorer.parity_outcomes(report) == {
+        "failed": ["Ratings › deleting the first rating removes a row"],
+        "flaky": ["Manufacturers › add then save appends the manufacturer"]}
+    assert r2_scorer.parity_outcomes(tmp_path / "missing.json") == {"failed": [], "flaky": []}
+
+
+def test_r2_parity_suite_retries_a_failed_test_once():
+    config = (r2_scorer.PARITY / "playwright.config.ts").read_text()
+    assert "retries: 1," in config
 
 
 def test_r2_fixed_files_exist_and_parity_suite_has_8_tests():

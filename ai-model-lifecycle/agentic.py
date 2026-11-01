@@ -430,6 +430,15 @@ def _ts(value: Any) -> float | None:
         return None
 
 
+def _content_blocks(ev: dict) -> list:
+    """The content blocks of a stream event's `message`, or [] when there are
+    none. Some events (e.g. system/permission_denied) carry `message` as plain
+    text, not an object."""
+    message = ev.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    return content if isinstance(content, list) else []
+
+
 def stream_timing(lines: list[str]) -> tuple[float | None, float | None]:
     """(tool time, thinking time) in seconds from a Claude Code session stream.
 
@@ -452,7 +461,7 @@ def stream_timing(lines: list[str]) -> tuple[float | None, float | None]:
             thinking_ms += float(ev["thinking_duration_ms"])
             saw_thinking = True
         at = _ts(ev.get("timestamp"))
-        for block in (ev.get("message") or {}).get("content") or []:
+        for block in _content_blocks(ev):
             if not isinstance(block, dict) or at is None:
                 continue
             if block.get("type") == "tool_use" and block.get("id"):
@@ -488,8 +497,10 @@ def _summarize_stream(lines: list[str], res: AgenticResult) -> None:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(ev, dict):
+            continue
         if ev.get("type") == "assistant":
-            for block in (ev.get("message") or {}).get("content") or []:
+            for block in _content_blocks(ev):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     res.tool_calls += 1
         elif ev.get("type") == "result":

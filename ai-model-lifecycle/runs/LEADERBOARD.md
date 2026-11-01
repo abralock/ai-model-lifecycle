@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-01T13:17:52+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-01T13:58:33+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -104,20 +104,20 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 
 ### r2_gwt_to_angular — GWT → Angular port
 
-| # | Model | Thinking level | Passed | Pass rate | E2E tests | Mean time (min) | TTFS (min) | Pass@900s | Pass@1800s | Pass@3600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
-|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | Claude Sonnet 5.5 (CC) | low | 1/1 | 100% | 100% (8/8) | 5.5 | 5.5 | 100% | 100% | 100% | 0.63 | $0.68 | $0.68 | 38 | 20261101T005111Z |
-| 2 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 100% (8/8) | 7.9 | 7.9 | 100% | 100% | 100% | 0.53 | $1.01 | $1.01 | 54 | 20261031T133909Z |
-| 3 | Claude Opus 5.5 (CC) | medium | 1/1 | 100% | 100% (8/8) | 9.3 | 9.3 | 100% | 100% | 100% | 0.32 | $2.65 | $2.65 | 41 | 20261031T153844Z |
-| 4 | Claude Opus 5.5 (CC) | low | 1/1 | 100% | 100% (8/8) | 10.6 | 10.6 | 100% | 100% | 100% | 1.28 | $1.60 | $1.60 | 36 | 20261101T024937Z |
-| 5 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 100% (8/8) | 11.5 | 11.5 | 100% | 100% | 100% | 1.35 | $1.10 | $1.10 | 52 | 20261031T161435Z |
-| 6 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 100% (8/8) | 19.3 | 19.3 | 0% | 100% | 100% | 0.64 | $1.62 | $1.62 | 106 | 20261031T173531Z |
-| 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (8/8) | 23.9 | 23.9 | 0% | 100% | 100% | 0.73 | $1.91 | $1.91 | 154 | 20261031T135411Z |
-| 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (8/8) | 24.3 | 24.3 | 0% | 100% | 100% | 1.28 | $1.26 | $1.26 | 126 | 20261101T033634Z |
-| 9 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (8/8) | 35.4 | 35.4 | 0% | 0% | 100% | 0.79 | $7.83 | $7.83 | 124 | 20261031T190847Z |
-| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 100% (8/8) | 35.6 | 35.6 | 0% | 0% | 100% | 1.23 | $9.83 | $9.83 | 218 | 20261101T071035Z |
+| # | Model | Thinking level | Passed | Pass rate | Integration tests | E2E tests | Mean time (min) | TTFS (min) | Pass@900s | Pass@1800s | Pass@3600s | Tool / model time | Mean cost | Cost / pass | Mean turns | Runs |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | Claude Sonnet 5.5 (CC) | low | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 5.5 | 5.5 | 100% | 100% | 100% | 0.63 | $0.68 | $0.68 | 38 | 20261101T005111Z |
+| 2 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 7.9 | 7.9 | 100% | 100% | 100% | 0.53 | $1.01 | $1.01 | 54 | 20261031T133909Z |
+| 3 | Claude Opus 5.5 (CC) | medium | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 9.3 | 9.3 | 100% | 100% | 100% | 0.32 | $2.65 | $2.65 | 41 | 20261031T153844Z |
+| 4 | Claude Opus 5.5 (CC) | low | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 10.6 | 10.6 | 100% | 100% | 100% | 1.28 | $1.60 | $1.60 | 36 | 20261101T024937Z |
+| 5 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 11.5 | 11.5 | 100% | 100% | 100% | 1.35 | $1.10 | $1.10 | 52 | 20261031T161435Z |
+| 6 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 19.3 | 19.3 | 0% | 100% | 100% | 0.64 | $1.62 | $1.62 | 106 | 20261031T173531Z |
+| 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 23.9 | 23.9 | 0% | 100% | 100% | 0.73 | $1.91 | $1.91 | 154 | 20261031T135411Z |
+| 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 24.3 | 24.3 | 0% | 100% | 100% | 1.28 | $1.26 | $1.26 | 126 | 20261101T033634Z |
+| 9 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 35.4 | 35.4 | 0% | 0% | 100% | 0.79 | $7.83 | $7.83 | 124 | 20261031T190847Z |
+| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 100% (7/7) | 100% (8/8) | 35.6 | 35.6 | 0% | 0% | 100% | 1.23 | $9.83 | $9.83 | 218 | 20261101T071035Z |
 
-Unit, integration and E2E tests show how far an attempt got, even when it failed: the share of the hidden suite's tests that passed, summed over the attempts whose suite ran ("not run": the build stopped before that suite, e.g. a failed build check). E2E is the browser suite (Cypress for r1b, the Playwright parity suite for r2). Pass rate stays the official result: an attempt passes only if every check passes.
+Unit, integration and E2E tests show how far an attempt got, even when it failed: the share of the hidden suite's tests that passed, summed over the attempts whose suite ran ("not run": the build stopped before that suite, e.g. a failed build check). Integration is the failsafe suite for r1b and, for r2, the UI-vs-API suite (each UI action checked against the REST API). E2E is the browser suite (Cypress for r1b, the Playwright parity suite for r2). Pass rate stays the official result: an attempt passes only if every check passes.
 
 TTFS is the mean wall time of passing attempts; Pass@T the share of attempts that passed within T seconds (agentic budgets: models.yaml `agentic_time_budgets_s`). Tool / model time divides the time tools ran (builds, tests, servers; parallel calls merged) by the time the model spent in API requests (opencode reports none: there it is the model steps' wall time minus the tool time inside them), summed over attempts that measured both; above 1 means the attempt was mostly waiting on builds and tests (docs/METRICS_PLAN.md §8).
 

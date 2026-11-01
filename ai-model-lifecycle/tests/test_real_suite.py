@@ -274,7 +274,8 @@ def test_r2_static_checks_without_cache(tmp_path, monkeypatch):
               "### FILE: workspace/src/app/app.config.ts\n```ts\nexport const appConfig = {};\n```\n"
               "### FILE: package.json\n```json\n{\"name\": \"hacked\"}\n```\n")
     res = r2_scorer.score(answer, workdir=tmp_path / "ws")
-    assert res.checks == {"edits_applied": True, "has_app": True, "build": False, "parity": False}
+    assert res.checks == {"edits_applied": True, "has_app": True, "build": False, "parity": False,
+                          "integration": False}
     assert not res.passed and "unverified" in res.reason
     # the fixed toolchain files are restored, whatever the answer wrote
     assert json.loads((tmp_path / "ws/package.json").read_text())["name"] != "hacked"
@@ -547,3 +548,35 @@ def test_r1_records_hidden_test_counts_from_surefire():
     r1_scorer.record_hidden_tests(res, None)
     assert res.details["tests"]["unit"] == {"passed": 0, "total": r1_scorer.expected_test_count(),
                                             "ran": False}
+
+
+def test_r2_integration_suite_checks_the_ui_against_the_api_on_its_own_server():
+    """Every UI action is checked against the REST API (a port that only
+    changes its tables in the browser fails), and each suite runs on its own
+    freshly seeded server so their data changes never meet."""
+    spec = (r2_scorer.PARITY / "integration.spec.ts").read_text()
+    import re
+    assert len(re.findall(r"^\s*test\('", spec, re.M)) == r2_scorer.MIN_INTEGRATION == 7
+    assert "apiUrl(" in spec and "'/manufacturers'" in spec and "'/ratings'" in spec
+    assert r2_scorer.SUITES == {"parity": ("parity.spec.ts", 8, "e2e"),
+                                "integration": ("integration.spec.ts", 7, "integration")}
+
+
+def test_r2_requires_the_integration_suite(monkeypatch):
+    """A port that passes the 8 parity tests but not the API checks fails."""
+    monkeypatch.setattr(r2_scorer, "cache_problem", lambda: None)
+    monkeypatch.setattr(r2_scorer, "build_angular", lambda ws, res: ws)
+    monkeypatch.setattr(r2_scorer, "run_parity", lambda *a: True)
+
+    def integration(base, dist, res):
+        r2_scorer.record_tests(res, "integration", passed=5, total=7)
+        res.details["integration_tests"] = {"passed": 5, "failed": 2, "flaky": 0, "expected": 7}
+        return False
+
+    monkeypatch.setattr(r2_scorer, "run_integration", integration)
+    answer = ("### FILE: src/app/app.component.ts\n```\nexport class AppComponent {}\n```\n"
+              "### FILE: src/app/app.config.ts\n```\nexport const appConfig = {};\n```\n")
+    res = r2_scorer.score(answer)
+    assert not res.passed and res.checks["parity"] and not res.checks["integration"]
+    assert "integration 5 passed, 2 failed" in res.reason
+    assert res.details["tests"]["integration"] == {"passed": 5, "total": 7, "ran": True}

@@ -1,16 +1,18 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-01T04:01:41+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-01T04:43:47+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
 # Agentic migration (primary result)
 
-The model works on a copy of the project in a sandbox with Claude Code, the way a developer would: it changes code, builds, runs the tests and fixes what fails, until its goal is met or the time limit is hit (agentic.py). What it delivered is then checked by the same acceptance test as single-shot, including hidden tests it never saw. Infra errors (sessions that never ran) are excluded.
+The model works on a copy of the project in a sandbox with a coding agent, the way a developer would: it changes code, builds, runs the tests and fixes what fails, until its goal is met or the time limit is hit (agentic.py). What it delivered is then checked by the same acceptance test as single-shot, including hidden tests it never saw. Infra errors (sessions that never ran) are excluded.
+
+Claude models run in Claude Code; open-weight models run in opencode (rows marked "· opencode"), so an opencode row differs from a Claude row in both the model and the agent.
 
 ## Ranking
 
-Models that tried every task rank first, then by pass rate; equal pass rates are ranked by time, then cost. Time is the agent's wall-clock time and cost Claude Code's estimate at API list prices; the ranking adds up each task's mean attempt, i.e. one pass through the tasks tried.
+Models that tried every task rank first, then by pass rate; equal pass rates are ranked by time, then cost. Time is the agent's wall-clock time. Cost is Claude Code's estimate at API list prices, or for opencode rows the OpenCode Go list price of the tokens used (quota, not a bill); the ranking adds up each task's mean attempt, i.e. one pass through the tasks tried.
 
 | # | Model | Thinking level | Sanity passed | Real passed | Overall pass rate | Tasks tried | Time, all tasks (min) | Cost, all tasks |
 |---:|---|---|---:|---:|---:|---:|---:|---:|
@@ -23,6 +25,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | low | 12/12 | 2/2 | 100% (14/14) | 6/6 | 64.7 | $2.57 |
 | 8 | Claude Haiku 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 72.5 | $4.34 |
 | 9 | Claude Opus 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 76.4 | $14.64 |
+| 10 | GLM-5.3 · opencode | medium | 1/1 | — | 100% (1/1) | 1/6 | 6.9 | $0.44 |
 
 ### r1_springboot2to3 — Spring Boot 2 → 3 (small app)
 
@@ -65,6 +68,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 1.2 | 1.2 | 100% | 100% | 100% | 0.14 | $0.25 | $0.25 | 6 | 20261031T123749Z |
 | 8 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 1.5 | 1.5 | 100% | 100% | 100% | 0.12 | $0.31 | $0.31 | 7 | 20261031T183901Z |
 | 9 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 2.1 | 2.1 | 33% | 100% | 100% | 0.10 | $0.02 | $0.02 | 16 | 20261031T165728Z |
+| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 6.9 | 6.9 | 0% | 0% | 100% | 0.12 | $0.44 | $0.44 | 18 | 20261101T043154Z |
 
 ### r5_etl_dashboard — ETL job + dashboard schema
 
@@ -108,5 +112,5 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 24.3 | 24.3 | 0% | 100% | 100% | 1.28 | $1.26 | $1.26 | 126 | 20261101T033634Z |
 | 9 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 35.4 | 35.4 | 0% | 0% | 100% | 0.79 | $7.83 | $7.83 | 124 | 20261031T190847Z |
 
-TTFS is the mean wall time of passing attempts; Pass@T the share of attempts that passed within T seconds (agentic budgets: models.yaml `agentic_time_budgets_s`). Tool / model time divides the time tools ran (builds, tests, servers; parallel calls merged) by the time the model spent in API requests, summed over attempts that measured both; above 1 means the attempt was mostly waiting on builds and tests (docs/METRICS_PLAN.md §8).
+TTFS is the mean wall time of passing attempts; Pass@T the share of attempts that passed within T seconds (agentic budgets: models.yaml `agentic_time_budgets_s`). Tool / model time divides the time tools ran (builds, tests, servers; parallel calls merged) by the time the model spent in API requests (opencode reports none: there it is the model steps' wall time minus the tool time inside them), summed over attempts that measured both; above 1 means the attempt was mostly waiting on builds and tests (docs/METRICS_PLAN.md §8).
 

@@ -1,0 +1,41 @@
+{
+  "pair_id": "sonnet-5.5-cc-vs-deepseek-v4-pro",
+  "case_id": "r3_oracle_to_postgres",
+  "model_slug": "claude-sonnet-5-5",
+  "model_name": "Claude Sonnet 5.5 (CC)",
+  "role": "current",
+  "rep": 0,
+  "run_id": "20261031T160419Z",
+  "mode": "agentic",
+  "effort_override": "high",
+  "reasoning_requested": {
+    "effort": "high"
+  },
+  "time_limit_s": 1200,
+  "goal": "postgres/schema.sql and postgres/procedures.sql exist; applied in that order to an empty database and loaded with seed.sql, sp_customer_tier() returns exactly the rows in expected/output.csv and sp_monthly_report('2026-09') exactly the rows in expected/output_monthly.csv; and neither file uses DUAL, NVL(, ROWNUM, (+), VARCHAR2 or sysdate.",
+  "provider": "claude-code",
+  "ok": true,
+  "error": null,
+  "timed_out": false,
+  "latency_s": 41.56,
+  "num_turns": 4,
+  "tool_calls": 3,
+  "duration_api_ms": 38168,
+  "tool_time_s": 0.18,
+  "thinking_time_s": 9.42,
+  "input_tokens": 8,
+  "output_tokens": 4364,
+  "cache_read_tokens": 64286,
+  "cache_write_tokens": 13187,
+  "cost_estimate_usd": 0.10451647000000001,
+  "final_message": "Both procedures now run on PostgreSQL 17 and return exactly the rows in `expected/output.csv` and `expected/output_monthly.csv`. I loaded `schema.sql`, `procedures.sql` and `seed.sql` into an empty database, called both procedures and compared the output. A grep of both files finds none of `DUAL`, `NVL(`, `ROWNUM`, `(+)`, `VARCHAR2`, `sysdate`, `%ROWTYPE` or `%TYPE`.\n\n- **`postgres/schema.sql`**: all six tables, plus the `seq_tier_id` sequence from the Oracle source. `NUMBER` ids became `bigint`, `NUMBER(p,s)` became `numeric(p,s)`, `VARCHAR2` became `varchar` and `DATE` became `timestamptz`.\n- **`postgres/procedures.sql`**: `sp_customer_tier()` and `sp_monthly_report(p_month varchar)`.\n- **Oracle constructs replaced**:\n  - `NVL` became `COALESCE`, and `sysdate` became `now()`.\n  - `ROWNUM = 1` became `LIMIT 1`.\n  - `COUNT(*) FROM DUAL` became a count over `(SELECT 1)`.\n  - The `%TYPE` and `%ROWTYPE` declarations became plain types.\n- **Ordering**: the golden files list rows in a particular order, which Oracle's grouping happened to produce. I added `ORDER BY` to both loops (spend ascending for tiers, revenue descending for the report) so rows are inserted and read back in that order. The tiers `ORDER BY` also breaks ties by customer id, which the seed data doesn't exercise.\n- **Exception handling in `sp_monthly_report`**: PostgreSQL doesn't allow `COMMIT` inside a block that has an `EXCEPTION` clause. The work therefore runs in an inner block and the commit comes after it. `e_no_data` became a custom error code, `U0001`. It is swallowed with a rollback, as in Oracle, and any other error is re-raised.\n- **Behaviour kept from Oracle**: the monthly aggregation doesn't filter by month, so `p_month` only labels the rows and decides which old rows get deleted, exactly as the original did. The `e_no_data` branch can never fire, because the count over one row is always 1.",
+  "files_changed": 2,
+  "output_text": "### FILE: postgres/schema.sql\n```\n-- PostgreSQL schema (converted from Oracle)\n\nCREATE TABLE customers (\n    customer_id   bigint PRIMARY KEY,\n    customer_name varchar(120) NOT NULL,\n    status        varchar(20)  DEFAULT 'ACTIVE'\n);\n\nCREATE TABLE orders (\n    order_id    bigint PRIMARY KEY,\n    customer_id bigint NOT NULL,\n    order_total numeric(12,2) NOT NULL,\n    order_date  timestamptz NOT NULL\n);\n\nCREATE TABLE customer_tiers (\n    customer_id    bigint PRIMARY KEY,\n    customer_name  varchar(120),\n    total_spend    numeric(12,2),\n    order_count    numeric,\n    tier           varchar(20),\n    computed_at    timestamptz\n);\n\nCREATE SEQUENCE seq_tier_id START WITH 1 INCREMENT BY 1;\n\nCREATE TABLE products (\n    product_id   bigint PRIMARY KEY,\n    product_name varchar(120),\n    category     varchar(60)\n);\n\nCREATE TABLE order_items (\n    order_item_id bigint PRIMARY KEY,\n    order_id      bigint,\n    product_id    bigint,\n    quantity      numeric,\n    unit_price    numeric(10,2)\n);\n\nCREATE TABLE monthly_report (\n    report_month   varchar(7),\n    category       varchar(60),\n    revenue        numeric(12,2),\n    units_sold     numeric\n);\n```\n\n### FILE: postgres/procedures.sql\n```\n-- PostgreSQL plpgsql procedures (converted from Oracle PL/SQL)\n\nCREATE OR REPLACE PROCEDURE sp_customer_tier()\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    v_tier   varchar(20);\n    v_status varchar(20);\n    rec      record;\nBEGIN\n    DELETE FROM customer_tiers;\n\n    -- Ordered by spend so rows are inserted (and read back) in a deterministic order\n    FOR rec IN\n        SELECT o.customer_id,\n               c.customer_name,\n               SUM(o.order_total) AS total_spend,\n               COUNT(*)           AS order_count\n        FROM   orders o\n        JOIN   customers c ON c.customer_id = o.customer_id\n        WHERE  COALESCE(c.status, 'ACTIVE') = 'ACTIVE'\n        GROUP  BY o.customer_id, c.customer_name\n        ORDER  BY SUM(o.order_total), o.customer_id\n    LOOP\n        IF rec.total_spend >= 1000 THEN\n            v_tier := 'GOLD';\n        ELSIF rec.total_spend >= 500 THEN\n            v_tier := 'SILVER';\n        ELSE\n            v_tier := 'BRONZE';\n        END IF;\n\n        INSERT INTO customer_tiers\n            (customer_id, customer_name, total_spend, order_count, tier, computed_at)\n        VALUES\n            (rec.customer_id, rec.customer_name, rec.total_spend, rec.order_count,\n             v_tier, now());\n    END LOOP;\n\n    SELECT status INTO v_status FROM customers LIMIT 1;\n    COMMIT;\nEND;\n$$;\n\nCREATE OR REPLACE PROCEDURE sp_monthly_report(p_month varchar)\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    v_row        monthly_report;\n    v_has_data   numeric := 0;\n    rec          record;\nBEGIN\n    -- COMMIT is not allowed inside a block that has an EXCEPTION clause, so the\n    -- work runs in an inner block (whose failure rolls back automatically) and\n    -- the commit happens after it.\n    BEGIN\n        SELECT COUNT(*) INTO v_has_data FROM (SELECT 1) AS one_row;\n\n        DELETE FROM monthly_report WHERE report_month = p_month;\n\n        FOR rec IN\n            SELECT p.category                                  AS category,\n                   COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS revenue,\n                   COALESCE(SUM(oi.quantity), 0)                 AS units_sold\n            FROM   order_items oi\n            JOIN   products p ON p.product_id = oi.product_id\n            GROUP  BY p.category\n            ORDER  BY 2 DESC, 1\n        LOOP\n            v_row.report_month := p_month;\n            v_row.category     := rec.category;\n            v_row.revenue      := rec.revenue;\n            v_row.units_sold   := rec.units_sold;\n\n            INSERT INTO monthly_report\n                (report_month, category, revenue, units_sold)\n            VALUES\n                (v_row.report_month, v_row.category, v_row.revenue, v_row.units_sold);\n        END LOOP;\n\n        IF v_has_data = 0 THEN\n            -- custom condition equivalent to Oracle's user-defined e_no_data\n            RAISE EXCEPTION 'no data' USING ERRCODE = 'U0001';\n        END IF;\n    EXCEPTION\n        WHEN SQLSTATE 'U0001' THEN\n            RETURN;  -- work rolled back; nothing to commit\n        WHEN OTHERS THEN\n            RAISE;\n    END;\n\n    COMMIT;\nEND;\n$$;\n```\n",
+  "passed": true,
+  "reason": "plpgsql translation matches golden result set; no oracle dialect tokens",
+  "checks": {
+    "dialect_clean": true,
+    "parity": true
+  },
+  "created_at": 1793462777.989735
+}

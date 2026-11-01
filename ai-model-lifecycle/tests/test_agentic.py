@@ -372,3 +372,23 @@ def test_tool_time_merges_parallel_calls_and_thinking_is_summed():
 
 def test_no_tools_or_thinking_in_the_stream_is_not_zero():
     assert agentic.stream_timing([_ev("assistant", 1.0, {"type": "text"})]) == (None, None)
+
+
+def test_wakeup_segments_sum_turns_and_tokens_but_not_running_totals():
+    """Background tools (Monitor, ScheduleWakeup) give one result event per
+    segment: num_turns/usage are per segment, cost and API time are running
+    totals, and the last segment may have an empty message."""
+    seg = lambda turns, cost, api, out, msg: json.dumps({
+        "type": "result", "subtype": "success", "is_error": False, "num_turns": turns,
+        "duration_api_ms": api, "total_cost_usd": cost, "result": msg,
+        "usage": {"input_tokens": 10, "output_tokens": out,
+                  "cache_read_input_tokens": 100, "cache_creation_input_tokens": 1}})
+    res = agentic.AgenticResult(pair_id=PAIR, case_id="r1_springboot2to3", model_slug="m",
+                                model_name="M", role="current", rep=0, run_id="r")
+    agentic._summarize_stream([seg(116, 1.38, 600, 1000, "Build passes."),
+                               seg(11, 2.62, 800, 50, "")], res)
+    assert res.num_turns == 127
+    assert res.output_tokens == 1050 and res.input_tokens == 20
+    assert res.cache_read_tokens == 200 and res.cache_write_tokens == 2
+    assert res.cost_estimate_usd == 2.62 and res.duration_api_ms == 800
+    assert res.final_message == "Build passes." and res.error is None

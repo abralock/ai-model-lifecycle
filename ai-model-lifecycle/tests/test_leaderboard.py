@@ -640,3 +640,25 @@ def test_task_tables_show_test_pass_rates_and_suites_that_never_ran(runs):
     r3_section = md.split(f"### {r3}")[1].split("###")[0]
     assert "Unit tests" not in r3_section
     assert "how far an attempt got" in md
+
+
+def test_an_excluded_agentic_attempt_is_not_counted_but_is_listed(runs):
+    """2026-11-02: two r1b attempts used the published answer while the sandbox
+    was open; their records stay, runs/EXCLUDED.json keeps them out."""
+    r1b = REAL.cases[0]
+    _agentic("a-vs-b", "20261101T000000Z", "haiku", r1b, passed=True, minutes=40)
+    _agentic("a-vs-b", "20261102T000000Z", "haiku", r1b, passed=False, minutes=30)
+    bad = f"a-vs-b/agentic/20261101T000000Z/haiku.{r1b}.20261101T000000Z.json"
+    (common.RUNS_DIR / "EXCLUDED.json").write_text(json.dumps({"agentic": {bad: "used the answer"}}))
+    board = leaderboard.build(score=True, scorer=fake_scorer)
+    task = board.agentic[0].by_case[r1b]
+    assert (task.passes, task.attempts) == (0, 1)                 # only the re-run counts
+    md = leaderboard.render(board)
+    assert "**Excluded attempts** (1" in md and f"`{bad}`: used the answer" in md
+
+
+def test_the_committed_exclusions_point_at_real_records():
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "runs" / "EXCLUDED.json"
+    for rec in json.loads(path.read_text())["agentic"]:
+        assert (path.parent / rec).is_file(), rec

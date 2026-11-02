@@ -19,7 +19,8 @@ Sonnet 5.5 working in Claude Code with `/goal` delivered a passing migration in
    (`docker/agent/Dockerfile`) with Java 17 + Maven, Java 8 (r2's original App
    Engine backend), Node 20 + Chromium and PostgreSQL 17. The workspace is the
    only mount it can write; dependency caches are named volumes. Model-run
-   commands never touch the host.
+   commands never touch the host. The sandbox has **no internet of its own**:
+   see [Sandbox network](#sandbox-network).
 3. **Goal.** The prompt is `/goal <condition>` (each case's `goal` in
    `agentic.py`); the task text is the case's `prompt.md` with its reply-format
    section replaced by workspace instructions. Claude Code keeps working until
@@ -35,6 +36,51 @@ Sonnet 5.5 working in Claude Code with `/goal` delivered a passing migration in
    a FILE/DELETE answer and the case's scorer checks it exactly as it checks a
    single-shot answer. The agent's own test edits are not part of it: acceptance
    runs our hidden tests.
+
+## Sandbox network
+
+The sandbox reaches only what a migration needs: the model APIs and the
+package registries. Agent containers join `gate1-sandbox`, an internal Docker
+network with no route to the internet; the only way out is `gate1-egress`, a
+small proxy (tinyproxy, `docker/egress/`) that forwards to the hosts in
+`docker/egress/allowlist.txt` and refuses everything else:
+
+| Allowed | Why |
+|---|---|
+| `api.anthropic.com`, `statsig.anthropic.com` | Claude Code |
+| `opencode.ai`, `models.opencode.ai`, `models.dev` | opencode on OpenCode Go (API, model catalog) |
+| `repo.maven.apache.org`, `repo1.maven.org` | Maven dependencies and plugins |
+| `registry.npmjs.org`, `nodejs.org` | npm packages; the Node that JHipster's build installs |
+| `download.cypress.io`, `cdn.cypress.io` | the Cypress binary |
+
+GitHub and every other code host or website are refused. Claude Code also runs
+without its web tools (`--disallowedTools Agent WebFetch WebSearch`); opencode's
+`webfetch` runs inside the sandbox, so the proxy refuses it the same way.
+
+* **Why.** Until 2026-11-01 the sandbox was open. On r1b two agents
+  (GLM-5.3 and Haiku 5.5 at high) downloaded JHipster's own published Boot 3
+  version of the app, i.e. the answer; GLM-5.3 copied files and build-plugin
+  versions from it. Those r1b results do not count.
+* **Checked before every batch.** `agentic.py` starts the network and proxy
+  if missing, then probes from a sandbox container: Maven Central must answer
+  through the proxy, GitHub must be refused, and nothing may get out without
+  the proxy. A failed probe stops the batch before anything is spent.
+* **Recorded per attempt.** Each record carries `network`, `egress_hosts`
+  (hosts the proxy let through) and `blocked_hosts` (hosts it refused); a
+  refused host is printed as the batch runs.
+* **Clients.** curl, git, npm, Node and both agents read the `*_PROXY`
+  variables; the entrypoint writes Maven's `~/.m2/settings.xml` (Maven reads
+  no proxy variables). `localhost` stays direct, so builds and tests reach
+  their own servers.
+* **Residual risk.** npm hosts `generator-jhipster`, whose templates describe
+  a JHipster 8 app; `egress_hosts` shows whether an attempt used the npm
+  registry at all (r1b and r2 ship with node_modules installed).
+* **Debugging only:** `--network open` puts the sandbox on Docker's default
+  bridge (the old behavior). Never use it for a scored run; records say
+  `"network": "open"`.
+
+One-time setup: `docker build -t gate1-egress:latest docker/egress` (and
+rebuild `gate1-agent` for `chromium-driver`, which agents used to download).
 
 ## Two agents: Claude Code and opencode
 
@@ -72,7 +118,7 @@ An opencode row differs from a Claude row in both the model and the agent
 | Task | Workspace | Tools it can use to test | Delivered (scored) |
 |---|---|---|---|
 | r1 Spring Boot 2 → 3 | the module (pom.xml, src) | Maven, Java 17 | pom.xml, src/** |
-| r1b JHipster → Boot 3 | the whole app at the pinned commit, node_modules installed | ./mvnw, Cypress (Chromium) | pom.xml, src/main/java, src/main/resources |
+| r1b JHipster → Boot 3 | the whole app at the pinned commit, node_modules installed, with `src/test` replaced by the already-migrated suite its prompt promises (the one the scorer runs; since 2026-11-02, before that the original Boot 2 tests) | ./mvnw, Cypress (Chromium) | pom.xml, src/main/java, src/main/resources |
 | r2 GWT → Angular | the Angular workspace, `gwt/`, `e2e/` | `ng build`, `sh backend/run.sh` (the original app + REST API on :8888, your build at /ng/) | src/** (the scorer restores the fixed files) |
 | r3 Oracle → Postgres | Oracle procedures, seed.sql, the Oracle result sets (`expected/`) | psql | postgres/** |
 | r4 Schema + load + index | schema.sql, target_query.sql | psql, EXPLAIN | solution.sql |

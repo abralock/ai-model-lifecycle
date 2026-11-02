@@ -223,17 +223,37 @@ class AgenticRow:
         return sum(t.cost_usd / t.attempts for t in self.by_case.values())
 
 
+EXCLUDED_FILE = "EXCLUDED.json"
+
+
+def excluded_attempts() -> dict[str, str]:
+    """Agentic attempts that do not count, {record path under runs/: reason},
+    from runs/EXCLUDED.json. The records stay in runs/ as the durable record;
+    the leaderboard skips them and lists them with the reason. First use
+    (2026-11-02): two r1b attempts whose agents downloaded the published
+    answer while the sandbox was still open to the internet."""
+    path = Path(common.RUNS_DIR) / EXCLUDED_FILE
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {str(k): str(v) for k, v in (data.get("agentic") or {}).items()}
+
+
 def agentic_rows(cases: list[str], *, score: bool, scorer=None,
                  since: str | None = None) -> list[AgenticRow]:
     """Every agentic attempt (runs/<pair>/agentic/<run>/), pooled per model and
     effort level across pairs and runs. A session that never ran is an infra
-    error and left out; pass/fail comes from the scorer (score cache) so a
-    scorer fix reaches old attempts too."""
+    error and left out, and so is an attempt listed in runs/EXCLUDED.json;
+    pass/fail comes from the scorer (score cache) so a scorer fix reaches old
+    attempts too."""
     pooled: dict[tuple[str, str, str], list[dict]] = {}
     root = Path(common.RUNS_DIR)
+    excluded = excluded_attempts()
     for f in sorted(root.glob("*/agentic/*/*.json")):
         rid = f.parent.name
         if since and rid < since:
+            continue
+        if f.relative_to(root).as_posix() in excluded:
             continue
         rec = json.loads(f.read_text(encoding="utf-8"))
         if rec.get("mode") != "agentic":
@@ -560,8 +580,14 @@ def render_agentic(board: Board) -> list[str]:
              "never saw. Infra errors (sessions that never ran) are excluded.", "",
              "Claude models run in Claude Code; open-weight models run in opencode (rows marked "
              "\"· opencode\"), so an opencode row differs from a Claude row in both the model "
-             "and the agent.", "",
-             "## Ranking", ""]
+             "and the agent.", ""]
+    excluded = excluded_attempts()
+    if excluded:
+        lines += [f"**Excluded attempts** ({len(excluded)}, listed in `runs/{EXCLUDED_FILE}`; "
+                  "the records are kept, but not counted):", ""]
+        lines += [f"- `{path}`: {reason}" for path, reason in sorted(excluded.items())]
+        lines += [""]
+    lines += ["## Ranking", ""]
     if not board.agentic:
         return lines + ["_No agentic runs yet (`python agentic.py --pair <pair> --role current`)._", ""]
     lines += ["Models that tried every task rank first, then by pass rate; equal pass rates "

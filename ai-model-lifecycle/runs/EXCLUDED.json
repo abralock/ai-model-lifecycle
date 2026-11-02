@@ -1,0 +1,7 @@
+{
+  "_about": "Agentic attempts the leaderboard does not count. Keys are record paths under runs/; values say why. The records stay as the durable record. See docs/AGENTIC.md, Sandbox network.",
+  "agentic": {
+    "haiku-5.5-cc-vs-glm-5.3-flash/agentic/20261031T173531Z/claude-haiku-5-5.r1b_jhipster_boot3.20261031T173531Z.json": "open sandbox (before 2026-11-02): the agent downloaded JHipster's own published Boot 3 version of the app (jhipster-sample-app v8.0.0), i.e. the answer; re-run in the allowlist sandbox (Haiku 5.5 high: fetched its pom.xml, 3 config files and its whole test folder)",
+    "opus-5.5-cc-vs-glm-5.3/agentic/20261101T061953Z/glm-5.3.r1b_jhipster_boot3.20261101T061953Z.json": "open sandbox (before 2026-11-02): the agent downloaded JHipster's own published Boot 3 version of the app (jhipster-sample-app v8.0.0), i.e. the answer; re-run in the allowlist sandbox (GLM-5.3: cloned it and copied files and build-plugin versions from it)"
+  }
+}

@@ -115,6 +115,9 @@ class Board:
     measured_only: bool = False
     include_effort: bool = False
     agentic: list["AgenticRow"] = field(default_factory=list)
+    # excluded attempts (runs/EXCLUDED.json), one row each with its reason:
+    # shown flagged under their task's table, never ranked or totalled
+    agentic_flagged: list[tuple["AgenticRow", str]] = field(default_factory=list)
     single_shot: bool = True            # False: agentic only (models.yaml leaderboard policy)
     agentic_budgets: dict[str, list[float]] = field(default_factory=dict)
 
@@ -239,6 +242,60 @@ def excluded_attempts() -> dict[str, str]:
     return {str(k): str(v) for k, v in (data.get("agentic") or {}).items()}
 
 
+def _add_attempt(task: "AgenticTask", r: dict, case: str, slug: str, *,
+                 score: bool, scorer=None) -> None:
+    """Fold one scored attempt into a task's metrics."""
+    if score:
+        sr = (scorer or score_case)(case, r.get("output_text") or "", slug)
+        ok = bool(sr.passed)
+        task.add_tests(getattr(sr, "tests", None)
+                       or (getattr(sr, "details", None) or {}).get("tests"))
+    else:
+        ok = bool(r.get("passed"))
+    task.outcomes.append((float(r.get("latency_s") or 0), ok))
+    task.runs.add(r["_run"])
+    task.cost_usd += float(r.get("cost_estimate_usd") or 0)
+    task.turns += float(r.get("num_turns") or 0)
+    tool, api_ms = _timing_value(r.get("tool_time_s")), r.get("duration_api_ms")
+    if tool is not None and isinstance(api_ms, (int, float)) and api_ms > 0:
+        task.tool_s += tool
+        task.model_s += api_ms / 1000
+        task.timed += 1
+
+
+def _display_name(rec: dict, slug: str, agent: str) -> str:
+    name = rec.get("model_name") or slug
+    return name if agent == "claude-code" else f"{name} · {agent}"
+
+
+def flagged_rows(cases: list[str], *, score: bool, scorer=None,
+                 since: str | None = None) -> list[tuple["AgenticRow", str]]:
+    """Each excluded attempt (runs/EXCLUDED.json) as its own one-attempt row,
+    with its reason: shown flagged under its task's table so its metrics stay
+    visible, never ranked or totalled."""
+    out = []
+    root = Path(common.RUNS_DIR)
+    for rel, reason in sorted(excluded_attempts().items()):
+        f = root / rel
+        if not f.exists():
+            continue
+        rid = f.parent.name
+        if since and rid < since:
+            continue
+        rec = json.loads(f.read_text(encoding="utf-8"))
+        case = rec.get("case_id")
+        if rec.get("mode") != "agentic" or not rec.get("ok") or case not in cases:
+            continue
+        slug, agent = rec.get("model_slug", "?"), rec.get("agent") or "claude-code"
+        row = AgenticRow(slug=slug, name=_display_name(rec, slug, agent) + " ⚑",
+                         level=rec.get("effort_override") or "model default",
+                         runs=[rid], agent=agent)
+        _add_attempt(row.by_case.setdefault(case, AgenticTask()), {**rec, "_run": rid}, case,
+                     slug, score=score, scorer=scorer)
+        out.append((row, reason))
+    return out
+
+
 def agentic_rows(cases: list[str], *, score: bool, scorer=None,
                  since: str | None = None) -> list[AgenticRow]:
     """Every agentic attempt (runs/<pair>/agentic/<run>/), pooled per model and
@@ -275,22 +332,7 @@ def agentic_rows(cases: list[str], *, score: bool, scorer=None,
                 continue
             task = row.by_case[case] = AgenticTask()
             for r in ran:
-                if score:
-                    sr = (scorer or score_case)(case, r.get("output_text") or "", slug)
-                    ok = bool(sr.passed)
-                    task.add_tests(getattr(sr, "tests", None)
-                                   or (getattr(sr, "details", None) or {}).get("tests"))
-                else:
-                    ok = bool(r.get("passed"))
-                task.outcomes.append((float(r.get("latency_s") or 0), ok))
-                task.runs.add(r["_run"])
-                task.cost_usd += float(r.get("cost_estimate_usd") or 0)
-                task.turns += float(r.get("num_turns") or 0)
-                tool, api_ms = _timing_value(r.get("tool_time_s")), r.get("duration_api_ms")
-                if tool is not None and isinstance(api_ms, (int, float)) and api_ms > 0:
-                    task.tool_s += tool
-                    task.model_s += api_ms / 1000
-                    task.timed += 1
+                _add_attempt(task, r, case, slug, score=score, scorer=scorer)
         if row.by_case:                 # only infra errors: nothing to rank
             rows.append(row)
     # equal pass rates (e.g. every model at 100%) are decided by time, then
@@ -555,6 +597,7 @@ def build(*, score: bool = True, scorer=None, routes: tuple[str, ...] | None = D
                  routes=routes, since=since, measured_only=measured_only,
                  include_effort=include_effort,
                  agentic=agentic_rows(all_cases, score=score, scorer=scorer, since=since),
+                 agentic_flagged=flagged_rows(all_cases, score=score, scorer=scorer, since=since),
                  single_shot=single_shot, agentic_budgets=agentic_budgets)
 
 
@@ -617,19 +660,24 @@ def render_agentic(board: Board) -> list[str]:
             ranked = sorted(((r, r.by_case[case]) for r in board.agentic if case in r.by_case),
                             key=lambda t: (-t[1].rate, t[1].mean_time_s,
                                            t[1].cost_usd / t[1].attempts, t[0].name))
-            if not ranked:
+            flagged = [(r, r.by_case[case], why) for r, why in board.agentic_flagged
+                       if case in r.by_case]
+            if not ranked and not flagged:
                 lines += ["_No agentic results for this task yet._", ""]
                 continue
-            kinds = [k for k in TEST_KINDS if any(k in t.tests for _, t in ranked)]
+            kinds = [k for k in TEST_KINDS
+                     if any(k in t.tests for t in [t for _, t in ranked] + [t for _, t, _ in flagged])]
             header = ["#", "Model", "Thinking level", "Passed", "Pass rate",
                       *[TEST_KINDS[k] for k in kinds], "Mean time (min)",
                       "TTFS (min)", *[f"Pass@{b:g}s" for b in budgets], "Tool / model time",
                       "Mean cost", "Cost / pass", "Mean turns", "Runs"]
             lines += ["| " + " | ".join(header) + " |",
                       "|---:|---|---|" + "---:|" * (len(header) - 4) + "---|"]
-            for i, (row, t) in enumerate(ranked, 1):
+            rows_out = [(str(i), row, t) for i, (row, t) in enumerate(ranked, 1)]
+            rows_out += [("⚑", row, t) for row, t, _ in flagged]
+            for i, row, t in rows_out:
                 ttfs, ratio = t.ttfs_s, t.tool_model_ratio
-                cells = [str(i), row.name, row.level, f"{t.passes}/{t.attempts}",
+                cells = [i, row.name, row.level, f"{t.passes}/{t.attempts}",
                          f"{t.rate * 100:.0f}%", *[t.tests_cell(k) for k in kinds],
                          f"{t.mean_time_s / 60:.1f}",
                          "n/a" if ttfs is None else f"{ttfs / 60:.1f}",
@@ -640,6 +688,12 @@ def render_agentic(board: Board) -> list[str]:
                          f"{t.turns / t.attempts:.0f}", ", ".join(sorted(t.runs))]
                 lines.append("| " + " | ".join(cells) + " |")
             lines.append("")
+            if flagged:
+                lines += ["⚑ Flagged, not counted in the ranking or totals (runs/"
+                          f"{EXCLUDED_FILE}); shown so the attempt's metrics stay visible:", ""]
+                lines += [f"- {row.name.removesuffix(' ⚑')}, {row.level}, run {row.runs[0]}: {why}"
+                          for row, _, why in flagged]
+                lines.append("")
     lines += ["Unit, integration and E2E tests show how far an attempt got, even when it "
               "failed: the share of the hidden suite's tests that passed, summed over the "
               "attempts whose suite ran (\"not run\": the build stopped before that suite, "

@@ -662,3 +662,26 @@ def test_the_committed_exclusions_point_at_real_records():
     path = Path(__file__).resolve().parent.parent / "runs" / "EXCLUDED.json"
     for rec in json.loads(path.read_text())["agentic"]:
         assert (path.parent / rec).is_file(), rec
+
+
+def test_an_excluded_attempt_shows_as_a_flagged_row_with_its_metrics(runs):
+    """An excluded attempt is not ranked or totalled, but its task table still
+    shows it, flagged, with every metric and its reason."""
+    r1b = REAL.cases[0]
+    _agentic("a-vs-b", "20261101T000000Z", "haiku", r1b, name="Haiku", minutes=20.0, cost=1.0)
+    _agentic("c-vs-d", "20261102T000000Z", "glm", r1b, name="GLM", minutes=55.6, cost=23.86)
+    path = f"c-vs-d/agentic/20261102T000000Z/glm.{r1b}.20261102T000000Z.json"
+    (runs / "EXCLUDED.json").write_text(json.dumps(
+        {"agentic": {path: "used the answer's blueprint (generator templates from npm)"}}))
+    board = leaderboard.build(score=False)
+    assert [r.slug for r in board.agentic] == ["haiku"]            # not ranked
+    assert [r.slug for r, _ in board.agentic_flagged] == ["glm"]
+    md = leaderboard.render(board)
+    section = md.split(f"### {r1b}")[1].split("###")[0]
+    flagged = next(ln for ln in section.splitlines() if "| GLM ⚑ |" in ln)
+    assert flagged.startswith("| ⚑ |") and "| 1/1 | 100% |" in flagged
+    assert "| 55.6 |" in flagged and "$23.86" in flagged and "20261102T000000Z" in flagged
+    assert "⚑ Flagged, not counted in the ranking or totals" in section
+    assert "used the answer's blueprint" in section
+    ranking = md.split("## Ranking")[1].split("###")[0]
+    assert "GLM" not in ranking

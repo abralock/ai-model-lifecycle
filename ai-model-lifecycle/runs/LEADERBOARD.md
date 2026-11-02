@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-01T13:58:33+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-02T12:44:55+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -9,6 +9,12 @@
 The model works on a copy of the project in a sandbox with a coding agent, the way a developer would: it changes code, builds, runs the tests and fixes what fails, until its goal is met or the time limit is hit (agentic.py). What it delivered is then checked by the same acceptance test as single-shot, including hidden tests it never saw. Infra errors (sessions that never ran) are excluded.
 
 Claude models run in Claude Code; open-weight models run in opencode (rows marked "· opencode"), so an opencode row differs from a Claude row in both the model and the agent.
+
+**Excluded attempts** (3, listed in `runs/EXCLUDED.json`; the records are kept, but not counted):
+
+- `haiku-5.5-cc-vs-glm-5.3-flash/agentic/20261031T173531Z/claude-haiku-5-5.r1b_jhipster_boot3.20261031T173531Z.json`: open sandbox (before 2026-11-02): the agent downloaded JHipster's own published Boot 3 version of the app (jhipster-sample-app v8.0.0), i.e. the answer; re-run in the allowlist sandbox (Haiku 5.5 high: fetched its pom.xml, 3 config files and its whole test folder)
+- `opus-5.5-cc-vs-glm-5.3/agentic/20261101T061953Z/glm-5.3.r1b_jhipster_boot3.20261101T061953Z.json`: open sandbox (before 2026-11-02): the agent downloaded JHipster's own published Boot 3 version of the app (jhipster-sample-app v8.0.0), i.e. the answer; re-run in the allowlist sandbox (GLM-5.3: cloned it and copied files and build-plugin versions from it)
+- `opus-5.5-cc-vs-glm-5.3/agentic/20261102T114053Z/glm-5.3.r1b_jhipster_boot3.20261102T114053Z.json`: allowlist sandbox (2026-11-02), r1b re-run: GitHub was refused (curl, webfetch and websearch for jhipster-sample-app v8.0.0 at minute 1), so the agent downloaded generator-jhipster 8.0.0 from npm (allowed for builds) and read the templates JHipster's Boot 3 app is generated from (pom.xml.ejs, config classes, ExceptionTranslator, application*.yml, Liquibase changelogs; 78 commands), plus generator-jhipster 7.9.3 to diff. It passed, but with the answer's blueprint; no other r1b session fetched the generator
 
 ## Ranking
 
@@ -21,11 +27,11 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 3 | Claude Opus 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 | 33.9 | $7.13 |
 | 4 | Claude Sonnet 5.5 (CC) | medium | 13/13 | 2/2 | 100% (15/15) | 6/6 | 37.4 | $2.59 |
 | 5 | Claude Sonnet 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 42.5 | $2.89 |
-| 6 | Claude Haiku 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 | 58.8 | $3.35 |
-| 7 | Claude Haiku 5.5 (CC) | low | 12/12 | 2/2 | 100% (14/14) | 6/6 | 64.7 | $2.57 |
-| 8 | Claude Haiku 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 72.5 | $4.34 |
+| 6 | Claude Haiku 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 50.2 | $2.64 |
+| 7 | Claude Haiku 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 | 58.8 | $3.35 |
+| 8 | Claude Haiku 5.5 (CC) | low | 13/13 | 2/2 | 100% (15/15) | 6/6 | 64.8 | $2.57 |
 | 9 | Claude Opus 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 76.4 | $14.64 |
-| 10 | GLM-5.3 · opencode | medium | 13/13 | 1/2 | 93% (14/15) | 6/6 | 113.8 | $24.07 |
+| 10 | GLM-5.3 · opencode | medium | 13/13 | 1/1 | 100% (14/14) | 5/6 | 65.0 | $11.81 |
 
 ### r1_springboot2to3 — Spring Boot 2 → 3 (small app)
 
@@ -66,8 +72,8 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 3 | Claude Opus 5.5 (CC) | low | 3/3 | 100% | 0.6 | 0.6 | 100% | 100% | 100% | 0.09 | $0.14 | $0.14 | 3 | 20261101T024018Z |
 | 4 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 1.1 | 1.1 | 100% | 100% | 100% | 0.15 | $0.01 | $0.01 | 11 | 20261031T121809Z |
 | 5 | Claude Sonnet 5.5 (CC) | high | 3/3 | 100% | 1.1 | 1.1 | 100% | 100% | 100% | 0.22 | $0.11 | $0.11 | 7 | 20261031T160419Z |
-| 6 | Claude Haiku 5.5 (CC) | low | 3/3 | 100% | 1.1 | 1.1 | 100% | 100% | 100% | 0.24 | $0.01 | $0.01 | 13 | 20261101T011617Z |
-| 7 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 1.2 | 1.2 | 100% | 100% | 100% | 0.14 | $0.25 | $0.25 | 6 | 20261031T123749Z |
+| 6 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 1.2 | 1.2 | 100% | 100% | 100% | 0.14 | $0.25 | $0.25 | 6 | 20261031T123749Z |
+| 7 | Claude Haiku 5.5 (CC) | low | 4/4 | 100% | 1.3 | 1.3 | 100% | 100% | 100% | 0.19 | $0.02 | $0.02 | 14 | 20261101T011617Z, 20261102T111637Z |
 | 8 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 1.5 | 1.5 | 100% | 100% | 100% | 0.12 | $0.31 | $0.31 | 7 | 20261031T183901Z |
 | 9 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 2.1 | 2.1 | 33% | 100% | 100% | 0.10 | $0.02 | $0.02 | 16 | 20261031T165728Z |
 | 10 | GLM-5.3 · opencode | medium | 4/4 | 100% | 9.0 | 9.0 | 0% | 0% | 50% | 0.11 | $0.62 | $0.62 | 22 | 20261101T043154Z, 20261101T044458Z |
@@ -94,13 +100,12 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 1 | Claude Sonnet 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 16.1 | 16.1 | 0% | 100% | 100% | 3.17 | $0.99 | $0.99 | 64 | 20261101T005111Z |
 | 2 | Claude Opus 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 17.2 | 17.2 | 0% | 100% | 100% | 2.09 | $3.29 | $3.29 | 75 | 20261031T145008Z |
 | 3 | Claude Opus 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 17.8 | 17.8 | 0% | 100% | 100% | 3.13 | $1.71 | $1.71 | 57 | 20261101T024937Z |
-| 4 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 25.8 | 25.8 | 0% | 100% | 100% | 3.98 | $1.28 | $1.28 | 70 | 20261031T130029Z |
-| 5 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 27.8 | 27.8 | 0% | 100% | 100% | 3.73 | $1.39 | $1.39 | 76 | 20261031T161435Z |
-| 6 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 28.6 | 28.6 | 0% | 100% | 100% | 1.42 | $1.38 | $1.38 | 131 | 20261031T135411Z |
-| 7 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 31.3 | 31.3 | 0% | 0% | 100% | 1.29 | $5.23 | $5.23 | 98 | 20261031T190847Z |
-| 8 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 33.2 | 33.2 | 0% | 0% | 100% | 2.45 | $1.25 | $1.25 | 127 | 20261101T013831Z |
-| 9 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 40.7 | 40.7 | 0% | 0% | 100% | 0.46 | $2.62 | $2.62 | 168 | 20261031T173531Z |
-| 10 | GLM-5.3 · opencode | medium | 0/1 | 0% | 100% (52/52) | not run | not run | 48.8 | n/a | 0% | 0% | 0% | 1.08 | $12.26 | n/a | 245 | 20261101T061953Z |
+| 4 | Claude Haiku 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 18.3 | 18.3 | 0% | 100% | 100% | 1.45 | $0.92 | $0.92 | 107 | 20261102T111955Z |
+| 5 | Claude Sonnet 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 25.8 | 25.8 | 0% | 100% | 100% | 3.98 | $1.28 | $1.28 | 70 | 20261031T130029Z |
+| 6 | Claude Sonnet 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 27.8 | 27.8 | 0% | 100% | 100% | 3.73 | $1.39 | $1.39 | 76 | 20261031T161435Z |
+| 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 28.6 | 28.6 | 0% | 100% | 100% | 1.42 | $1.38 | $1.38 | 131 | 20261031T135411Z |
+| 8 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 31.3 | 31.3 | 0% | 0% | 100% | 1.29 | $5.23 | $5.23 | 98 | 20261031T190847Z |
+| 9 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 33.2 | 33.2 | 0% | 0% | 100% | 2.45 | $1.25 | $1.25 | 127 | 20261101T013831Z |
 
 ### r2_gwt_to_angular — GWT → Angular port
 

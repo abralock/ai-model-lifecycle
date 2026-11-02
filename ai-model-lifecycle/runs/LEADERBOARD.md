@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-02T12:44:55+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-02T13:27:25+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -106,6 +106,15 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 28.6 | 28.6 | 0% | 100% | 100% | 1.42 | $1.38 | $1.38 | 131 | 20261031T135411Z |
 | 8 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 31.3 | 31.3 | 0% | 0% | 100% | 1.29 | $5.23 | $5.23 | 98 | 20261031T190847Z |
 | 9 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 33.2 | 33.2 | 0% | 0% | 100% | 2.45 | $1.25 | $1.25 | 127 | 20261101T013831Z |
+| ⚑ | Claude Haiku 5.5 (CC) ⚑ | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 40.7 | 40.7 | 0% | 0% | 100% | 0.46 | $2.62 | $2.62 | 168 | 20261031T173531Z |
+| ⚑ | GLM-5.3 · opencode ⚑ | medium | 0/1 | 0% | 100% (52/52) | not run | not run | 48.8 | n/a | 0% | 0% | 0% | 1.08 | $12.26 | n/a | 245 | 20261101T061953Z |
+| ⚑ | GLM-5.3 · opencode ⚑ | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 55.6 | 55.6 | 0% | 0% | 100% | 0.99 | $23.86 | $23.86 | 414 | 20261102T114053Z |
+
+⚑ Flagged, not counted in the ranking or totals (runs/EXCLUDED.json); shown so the attempt's metrics stay visible:
+
+- Claude Haiku 5.5 (CC), high, run 20261031T173531Z: open sandbox (before 2026-11-02): the agent downloaded JHipster's own published Boot 3 version of the app (jhipster-sample-app v8.0.0), i.e. the answer; re-run in the allowlist sandbox (Haiku 5.5 high: fetched its pom.xml, 3 config files and its whole test folder)
+- GLM-5.3 · opencode, medium, run 20261101T061953Z: open sandbox (before 2026-11-02): the agent downloaded JHipster's own published Boot 3 version of the app (jhipster-sample-app v8.0.0), i.e. the answer; re-run in the allowlist sandbox (GLM-5.3: cloned it and copied files and build-plugin versions from it)
+- GLM-5.3 · opencode, medium, run 20261102T114053Z: allowlist sandbox (2026-11-02), r1b re-run: GitHub was refused (curl, webfetch and websearch for jhipster-sample-app v8.0.0 at minute 1), so the agent downloaded generator-jhipster 8.0.0 from npm (allowed for builds) and read the templates JHipster's Boot 3 app is generated from (pom.xml.ejs, config classes, ExceptionTranslator, application*.yml, Liquibase changelogs; 78 commands), plus generator-jhipster 7.9.3 to diff. It passed, but with the answer's blueprint; no other r1b session fetched the generator
 
 ### r2_gwt_to_angular — GWT → Angular port
 

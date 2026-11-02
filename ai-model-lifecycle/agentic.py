@@ -14,12 +14,22 @@ Java 17 + Maven, Node 20 + Chromium, PostgreSQL 17), so model-run commands never
 touch the host; the workspace is the only thing mounted. The container logs in
 with CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`, the claude.ai subscription),
 passed by name from the environment so the token never appears on a command line.
-No sub-agents (the Agent tool is disallowed) and no MCP servers or user settings.
+No sub-agents (the Agent tool is disallowed), no web tools, and no MCP servers or
+user settings.
+
+The sandbox has no internet access of its own: it sits on an internal Docker
+network, and the only way out is an allowlist proxy (docker/egress/: the model
+APIs and the package registries a build needs). Each attempt records the hosts
+it reached and the ones the proxy refused. Before this (runs up to 2026-11-01)
+the sandbox was open, and on r1b two agents downloaded JHipster's own published
+Boot 3 version of the app, i.e. the answer.
 
 When the agent stops, the files it delivered (each case's `deliverables`) are
 turned into a FILE/DELETE answer and scored by the case's own scorer — the same
 acceptance check as single-shot, including hidden tests the agent never sees.
-Answer keys and hidden tests are never copied into the workspace.
+Answer keys are never copied into the workspace; hidden tests neither, except
+r1b's, which its prompt promises as the project's (already migrated) test
+sources and which the scorer swaps in again from its own copy.
 
 Records go to runs/<pair>/agentic/<run_id>/ (outside the single-shot runs, so
 the scorecard never mixes them in) with a REPORT.md.
@@ -65,6 +75,21 @@ DEFAULT_TIME_LIMIT_S = 3600
 # Build caches shared across attempts (dependencies only; never model output).
 M2_VOLUME = "gate1_agent_m2"
 NPM_VOLUME = "gate1_agent_npm"
+# Network: the sandbox's only way out is the allowlist proxy (docker/egress/).
+NETWORK_ALLOWLIST = "allowlist"         # internal network + allowlist proxy (default)
+NETWORK_OPEN = "open"                   # Docker's default bridge: unrestricted (debugging only)
+SANDBOX_NETWORK = "gate1-sandbox"       # `docker network create --internal`: no route out
+EGRESS_NAME = "gate1-egress"
+EGRESS_IMAGE = os.environ.get("GATE1_EGRESS_IMAGE", "gate1-egress:latest")
+EGRESS_PORT = 8888
+EGRESS_URL = f"http://{EGRESS_NAME}:{EGRESS_PORT}"
+NO_PROXY = "localhost,127.0.0.1,::1"
+# Probed by check_egress() before a batch: one must pass, the other be refused.
+EGRESS_PROBE_ALLOWED = "https://repo.maven.apache.org/maven2/"
+EGRESS_PROBE_BLOCKED = "https://github.com/"
+# Claude Code's own web tools would bypass nothing (the proxy refuses them too),
+# but they are off so the sandbox never even tries.
+CLAUDE_DISALLOWED_TOOLS = ("Agent", "WebFetch", "WebSearch")
 
 SYSTEM_NOTE = (
     "You are a senior software engineer doing a real migration. The project is in "
@@ -112,12 +137,21 @@ def _setup_r1b(ws: Path) -> None:
     # The full app at the pinned commit (frontend + Cypress included, so the
     # agent can run the e2e suite), from the cache setup_e2e.sh builds.
     from scorers.base import cache_dir
+    from scorers.r1b_scorer import HIDDEN_TESTS
     frontend = cache_dir() / "r1b_jhipster_boot3" / "frontend"
     if not (frontend / "node_modules" / ".bin" / "cypress").exists():
         raise RuntimeError("r1b needs the e2e cache: run cases/r1b_jhipster_boot3/setup_e2e.sh")
     for entry in frontend.iterdir():
         if entry.name != "target":
             _copy(entry, ws / entry.name)
+    # The prompt says src/test is "maintained separately and already migrated
+    # to Boot 3", so the agent gets exactly that: the suite the scorer runs.
+    # Until 2026-11-02 it got the original Boot 2 tests instead, and every
+    # agent had to migrate them itself just to check its work (all ten r1b
+    # sessions did). src/test is not a deliverable, and the scorer swaps in its
+    # own copy, so edits there still change nothing.
+    shutil.rmtree(ws / "src" / "test", ignore_errors=True)
+    _copy(HIDDEN_TESTS, ws / "src" / "test")
 
 
 _R2_BACKEND = """#!/bin/sh
@@ -382,6 +416,9 @@ class AgenticResult:
     reasoning_tokens: int = 0                # opencode: reported separately (also in output_tokens)
     model_time_source: str | None = None     # "reported" (Claude Code) | "derived" (opencode)
     agent_error: str | None = None           # an agent error that ended the session (scored)
+    network: str = NETWORK_ALLOWLIST         # allowlist | open (see NETWORK_*)
+    egress_hosts: list[str] = field(default_factory=list)    # hosts the proxy let through
+    blocked_hosts: list[str] = field(default_factory=list)   # hosts the proxy refused
     final_message: str = ""
     files_changed: int = 0
     output_text: str = ""               # the harvested answer the scorer reads
@@ -410,8 +447,27 @@ def write_control(control: Path, goal: str, system: str) -> None:
     (control / "system.md").write_text(system, encoding="utf-8")
 
 
+def _network_args(network: str) -> list[str]:
+    """The sandbox's network: on the allowlist (the default) it joins the
+    internal network, whose only way out is the egress proxy, and every client
+    is pointed at that proxy (curl, git, npm, Node, Claude Code, opencode read
+    the *_PROXY variables; the entrypoint writes Maven's settings.xml from
+    GATE1_PROXY_*). Loopback stays direct: builds and tests talk to their own
+    servers on localhost."""
+    if network == NETWORK_OPEN:
+        return []
+    if network != NETWORK_ALLOWLIST:
+        raise ValueError(f"unknown sandbox network {network!r}")
+    args = ["--network", SANDBOX_NETWORK]
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        args += ["-e", f"{k}={EGRESS_URL}"]
+    for k in ("NO_PROXY", "no_proxy"):
+        args += ["-e", f"{k}={NO_PROXY}"]
+    return args + ["-e", f"GATE1_PROXY_HOST={EGRESS_NAME}", "-e", f"GATE1_PROXY_PORT={EGRESS_PORT}"]
+
+
 def _docker_prefix(name: str, ws: Path, control: Path, postgres: bool,
-                   env_args: list[str]) -> list[str]:
+                   env_args: list[str], network: str = NETWORK_ALLOWLIST) -> list[str]:
     """`docker run` up to the image: the workspace and the read-only control
     dir are the first two mounts, then the dependency caches. `env_args` pass
     secrets by name only (`-e NAME`), so no value reaches a command line."""
@@ -419,20 +475,25 @@ def _docker_prefix(name: str, ws: Path, control: Path, postgres: bool,
             "-v", f"{ws}:/work", "-v", f"{control}:/gate1:ro",
             "-v", f"{M2_VOLUME}:/home/agent/.m2", "-v", f"{NPM_VOLUME}:/home/agent/.npm",
             *env_args,
+            *_network_args(network),
             "-e", f"GATE1_POSTGRES={1 if postgres else 0}",
             "--shm-size", "1g", IMAGE]
 
 
 def docker_command(name: str, ws: Path, control: Path, model: str,
-                   effort: str | None, postgres: bool) -> list[str]:
+                   effort: str | None, postgres: bool,
+                   network: str = NETWORK_ALLOWLIST) -> list[str]:
     cmd = _docker_prefix(name, ws, control, postgres,
-                         ["-e", TOKEN_ENV]) + [   # by name: the value comes from our env
+                         ["-e", TOKEN_ENV,     # by name: the value comes from our env
+                          # no telemetry or update checks: the proxy would refuse them
+                          "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"],
+                         network) + [
            # the prompt (`/goal ...`) arrives on stdin, the task in a file
            "sh", "-c", 'exec claude -p "$@" < /gate1/prompt.txt', "claude",
            "--model", model,
            "--append-system-prompt-file", "/gate1/system.md",
            "--dangerously-skip-permissions",
-           "--disallowedTools", "Agent",
+           "--disallowedTools", *CLAUDE_DISALLOWED_TOOLS,
            "--setting-sources", "", "--strict-mcp-config",
            "--output-format", "stream-json", "--verbose",
            "--no-session-persistence"]
@@ -620,11 +681,11 @@ def write_opencode_control(control: Path, goal: str, system: str, model_id: str,
 
 
 def opencode_command(name: str, ws: Path, control: Path, model_id: str,
-                     postgres: bool) -> list[str]:
+                     postgres: bool, network: str = NETWORK_ALLOWLIST) -> list[str]:
     env_args = ["-e", OPENCODE_KEY_ENV]          # by name: the value comes from our env
     for k, v in OPENCODE_ENV_FLAGS.items():
         env_args += ["-e", f"{k}={v}"]
-    return _docker_prefix(name, ws, control, postgres, env_args) + [
+    return _docker_prefix(name, ws, control, postgres, env_args, network) + [
         "sh", "-c", 'exec opencode run "$@" < /gate1/prompt.txt', "opencode",
         "--standalone", "--format", "json", "--auto", "--thinking",
         "--title", "gate1", "--model", f"{OPENCODE_PROVIDER}/{model_id}"]
@@ -770,8 +831,9 @@ class ClaudeCodeBackend:
         write_control(control, goal, system)
 
     def command(self, name: str, ws: Path, control: Path, model_id: str,
-                effort: str | None, postgres: bool) -> list[str]:
-        return docker_command(name, ws, control, model_id, effort, postgres)
+                effort: str | None, postgres: bool,
+                network: str = NETWORK_ALLOWLIST) -> list[str]:
+        return docker_command(name, ws, control, model_id, effort, postgres, network)
 
     def env(self) -> dict[str, str]:
         return _container_env()
@@ -802,8 +864,9 @@ class OpencodeBackend:
         write_opencode_control(control, goal, system, model_id, effort)
 
     def command(self, name: str, ws: Path, control: Path, model_id: str,
-                effort: str | None, postgres: bool) -> list[str]:
-        return opencode_command(name, ws, control, model_id, postgres)
+                effort: str | None, postgres: bool,
+                network: str = NETWORK_ALLOWLIST) -> list[str]:
+        return opencode_command(name, ws, control, model_id, postgres, network)
 
     def env(self) -> dict[str, str]:
         return _opencode_env()
@@ -836,6 +899,74 @@ def backend_for(cfg, model) -> ClaudeCodeBackend | OpencodeBackend:
                      "the Claude Code nor the OpenCode Go route")
 
 
+# --------------------------------------------------------------------------- #
+# Egress: the allowlist proxy that is the sandbox's only way out               #
+# --------------------------------------------------------------------------- #
+_EGRESS_OK_RE = re.compile(r'Established connection to host "([^"]+)"')
+_EGRESS_REFUSED_RE = re.compile(r'refused on filtered \w+ "([^"]+)"')
+
+
+def _docker_out(*args: str) -> tuple[int, str]:
+    p = subprocess.run(["docker", *args], capture_output=True, text=True)
+    return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()
+
+
+def start_egress() -> None:
+    """The internal network and the proxy on it, created if missing. A proxy
+    already running is kept, so two batches can share it (their hosts then mix
+    in each other's records); `docker rm -f gate1-egress` restarts it."""
+    if _docker_out("image", "inspect", EGRESS_IMAGE)[0]:
+        raise NotReady(f"egress proxy image {EGRESS_IMAGE} not built: "
+                       f"docker build -t {EGRESS_IMAGE} docker/egress")
+    rc, internal = _docker_out("network", "inspect", "--format", "{{.Internal}}", SANDBOX_NETWORK)
+    if rc:
+        rc, out = _docker_out("network", "create", "--internal", SANDBOX_NETWORK)
+        if rc:
+            raise NotReady(f"could not create the sandbox network {SANDBOX_NETWORK}: {out[-300:]}")
+    elif internal != "true":
+        raise NotReady(f"docker network {SANDBOX_NETWORK} exists but is not internal (it would "
+                       f"let the sandbox out): docker network rm {SANDBOX_NETWORK}")
+    if _docker_out("inspect", "--format", "{{.State.Running}}", EGRESS_NAME)[1] == "true":
+        return
+    _docker_out("rm", "-f", EGRESS_NAME)
+    rc, out = _docker_out("run", "-d", "--rm", "--name", EGRESS_NAME, EGRESS_IMAGE)
+    if not rc:
+        rc, out = _docker_out("network", "connect", SANDBOX_NETWORK, EGRESS_NAME)
+    if rc:
+        _docker_out("rm", "-f", EGRESS_NAME)
+        raise NotReady(f"could not start the egress proxy: {out[-300:]}")
+
+
+def check_egress() -> None:
+    """Prove the lock before spending anything: from a sandbox container, an
+    allowed host answers through the proxy, a refused one does not, and nothing
+    gets out without the proxy."""
+    probe = (f'a=$(curl -s -o /dev/null -w "%{{http_code}}" --max-time 20 {EGRESS_PROBE_ALLOWED}); '
+             f'b=$(curl -s -o /dev/null -w "%{{http_code}}" --max-time 20 {EGRESS_PROBE_BLOCKED}); '
+             f'c=$(curl -s -o /dev/null -w "%{{http_code}}" --max-time 10 --noproxy "*" '
+             f'{EGRESS_PROBE_ALLOWED}); echo "allowed=$a blocked=$b direct=$c"')
+    cmd = ["run", "--rm", *_network_args(NETWORK_ALLOWLIST), "--entrypoint", "sh", IMAGE, "-c", probe]
+    rc, out = _docker_out(*cmd)
+    got = dict(kv.split("=", 1) for kv in re.findall(r"\b(?:allowed|blocked|direct)=\d+", out))
+    ok = (got.get("allowed", "000")[:1] in ("2", "3")
+          and got.get("blocked") == "000" and got.get("direct") == "000")
+    if not ok:
+        raise NotReady(f"sandbox network check failed (want allowed=2xx/3xx, blocked=000, "
+                       f"direct=000): {out[-300:] or f'exit {rc}'}")
+
+
+def egress_since(since: float) -> tuple[list[str], list[str]]:
+    """(hosts let through, hosts refused) in the proxy's log since `since`."""
+    _, log = _docker_out("logs", "--since", f"{since:.3f}", EGRESS_NAME)
+    return (sorted(set(_EGRESS_OK_RE.findall(log))), sorted(set(_EGRESS_REFUSED_RE.findall(log))))
+
+
+def prepare_network(network: str) -> None:
+    if network == NETWORK_ALLOWLIST:
+        start_egress()
+        check_egress()
+
+
 def _redact(line: str, secrets: list[str]) -> str:
     for value in secrets:
         line = line.replace(value, "[REDACTED]")
@@ -845,7 +976,8 @@ def _redact(line: str, secrets: list[str]) -> str:
 def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run_id: str,
                 *, time_limit_s: int = DEFAULT_TIME_LIMIT_S, effort: str | None = None,
                 workroot: Path | None = None, score: bool = True,
-                scorer: Callable | None = None, backend=None) -> AgenticResult:
+                scorer: Callable | None = None, backend=None,
+                network: str = NETWORK_ALLOWLIST) -> AgenticResult:
     spec = CASES[case_id]
     backend = backend or backend_for(cfg, model)
     sources.ensure(case_id)
@@ -855,7 +987,8 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
                         reasoning_requested={"effort": effort} if effort else None,
                         time_limit_s=time_limit_s, goal=spec.goal, created_at=time.time(),
                         provider=backend.route, agent=backend.name,
-                        agent_version=backend.version, goal_mode=backend.goal_mode)
+                        agent_version=backend.version, goal_mode=backend.goal_mode,
+                        network=network)
     out = record_path(pair_id, run_id, model.id, case_id, rep)
     out.parent.mkdir(parents=True, exist_ok=True)
     root = workroot or Path(common.RUNS_DIR).parent / ".agentic-work"
@@ -870,8 +1003,9 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
         backend.write_control(control, spec.goal,
                               SYSTEM_NOTE + "\n\n# The task\n\n" + task_prompt(case_id),
                               model.id, effort)
-        cmd = backend.command(name, ws, control, model.id, effort, spec.postgres)
+        cmd = backend.command(name, ws, control, model.id, effort, spec.postgres, network)
         env = backend.env()
+        started_at = time.time()
         # a key the agent prints (e.g. by running `env`) never reaches runs/
         secrets = [env[k] for k in backend.secret_envs if len(env.get(k) or "") >= 8]
         lines: list[str] = []
@@ -897,6 +1031,8 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
                 proc.wait(timeout=60)
             reader.join(timeout=30)
         res.latency_s = round(time.monotonic() - t0, 2)
+        if network == NETWORK_ALLOWLIST:
+            res.egress_hosts, res.blocked_hosts = egress_since(started_at)
         backend.summarize(lines, res, model.id)
         if proc.returncode not in (0, None) and not res.timed_out and res.num_turns is None:
             tail = "".join(lines[-5:]).strip()
@@ -1006,7 +1142,8 @@ def _docker_ready() -> None:
 def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
         repeats: int = 1, time_limit_s: int = DEFAULT_TIME_LIMIT_S,
         effort: str | None = None, backend=None,
-        max_spend_usd: float | None = None) -> tuple[str, list[AgenticResult]]:
+        max_spend_usd: float | None = None,
+        network: str = NETWORK_ALLOWLIST) -> tuple[str, list[AgenticResult]]:
     pair = cfg.get_pair(pair_id)
     model = pair.current if role == "current" else pair.target
     backend = backend or backend_for(cfg, model)
@@ -1023,24 +1160,31 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
     effort = effort or cfg.effort
     if effort and effort not in backend.efforts:
         raise ValueError(f"{backend.name} takes effort {', '.join(backend.efforts)}; got {effort!r}")
+    prepare_network(network)
     run_id = new_run_id()
     results = []
     stop = False
     spent = 0.0
     print(f"agentic run id: {run_id}  model: {model.name}  agent: {backend.name}  "
-          f"effort: {effort or 'default'}")
+          f"effort: {effort or 'default'}  network: {network}")
+    if network == NETWORK_OPEN:
+        print("warning: --network open: the sandbox can reach the whole internet, "
+              "including published answers; not for scored runs", flush=True)
     for case_id in cases:
         for rep in range(repeats):
             if stop:
                 break
             r = run_attempt(cfg, pair_id, role, model, case_id, rep, run_id,
-                            time_limit_s=time_limit_s, effort=effort, backend=backend)
+                            time_limit_s=time_limit_s, effort=effort, backend=backend,
+                            network=network)
             results.append(r)
             status = ("INFRA " + (r.error or "")[:120] if not r.ok else
                       ("PASS" if r.passed else f"FAIL ({r.reason[:120]})"))
             print(f"  {case_id} rep {rep + 1}/{repeats}: {r.latency_s / 60:.1f} min, "
                   f"{r.num_turns or 0} turns, ${r.cost_estimate_usd or 0:.2f}"
                   f"{' [time limit]' if r.timed_out else ''}  {status}", flush=True)
+            if r.blocked_hosts:
+                print(f"    proxy refused: {', '.join(r.blocked_hosts)}", flush=True)
             if not r.ok and r.error and backend.limit_re().search(r.error):
                 # every later attempt would fail the same way
                 print(f"stopping: {r.error[:120]}", flush=True)
@@ -1069,6 +1213,11 @@ def main(argv: list[str] | None = None) -> int:
                                      "reasoning_effort (default: models.yaml defaults.effort)")
     ap.add_argument("--max-spend-usd", type=float,
                     help="stop the batch once the estimated spend reaches this (list prices)")
+    ap.add_argument("--network", choices=(NETWORK_ALLOWLIST, NETWORK_OPEN),
+                    default=NETWORK_ALLOWLIST,
+                    help="allowlist (default): the sandbox reaches only the model APIs and "
+                         "package registries, through docker/egress; open: the whole "
+                         "internet (debugging only, never for scored runs)")
     args = ap.parse_args(argv)
     load_env()
     cfg = load_config()
@@ -1078,7 +1227,7 @@ def main(argv: list[str] | None = None) -> int:
         backend.preflight()
         run(cfg, args.pair, role=args.role, case=args.case, repeats=args.repeats,
             time_limit_s=args.time_limit, effort=args.effort, backend=backend,
-            max_spend_usd=args.max_spend_usd)
+            max_spend_usd=args.max_spend_usd, network=args.network)
     except (NotReady, ValueError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

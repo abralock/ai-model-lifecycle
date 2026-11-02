@@ -21,6 +21,16 @@ from common import load_config
 from scorers.base import parse_deletes, parse_files
 
 PAIR = "sonnet-5.5-cc-vs-deepseek-v4-pro"
+REAL_PREPARE_NETWORK = agentic.prepare_network
+REAL_EGRESS_SINCE = agentic.egress_since
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    """Offline: no proxy is started or probed and no proxy log is read; the
+    tests of those functions call the real ones (REAL_*) with docker faked."""
+    monkeypatch.setattr(agentic, "prepare_network", lambda network: None)
+    monkeypatch.setattr(agentic, "egress_since", lambda since: ([], []))
 
 
 # --------------------------------------------------------------------------- #
@@ -610,3 +620,148 @@ def test_the_batch_stops_at_the_spend_cap(env, monkeypatch):
     agentic.run(env["cfg"], PAIR, role="target", case="r1_springboot2to3", repeats=5,
                 backend=agentic.OpencodeBackend(), max_spend_usd=5.0)
     assert len(calls) == 2                                   # $3, then $6 >= $5: stop
+
+
+# --------------------------------------------------------------------------- #
+# the sandbox network: an allowlist proxy is the only way out                  #
+# --------------------------------------------------------------------------- #
+# Live 2026-11-01: with an open sandbox, two r1b agents downloaded JHipster's
+# own published Boot 3 version of the app (the answer) from GitHub.
+def _env_values(cmd):
+    return [cmd[i + 1] for i, a in enumerate(cmd) if a == "-e"]
+
+
+def test_the_sandbox_joins_the_internal_network_and_goes_out_through_the_proxy(tmp_path):
+    for cmd in (agentic.docker_command("n", tmp_path, tmp_path, "claude-sonnet-5-5", "low", False),
+                agentic.opencode_command("n", tmp_path, tmp_path, "glm-5.3", False)):
+        assert cmd[cmd.index("--network") + 1] == agentic.SANDBOX_NETWORK
+        env = _env_values(cmd)
+        for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+            assert f"{k}={agentic.EGRESS_URL}" in env
+        assert "NO_PROXY=localhost,127.0.0.1,::1" in env       # builds talk to their own servers
+        assert f"GATE1_PROXY_HOST={agentic.EGRESS_NAME}" in env  # Maven's settings.xml
+        assert cmd.index("--network") < cmd.index(agentic.IMAGE)
+
+
+def test_an_open_network_run_has_no_network_flag_and_no_proxy(tmp_path):
+    cmd = agentic.docker_command("n", tmp_path, tmp_path, "claude-sonnet-5-5", "low", False,
+                                 network=agentic.NETWORK_OPEN)
+    assert "--network" not in cmd
+    assert not any("PROXY" in v for v in _env_values(cmd))
+    with pytest.raises(ValueError, match="unknown sandbox network"):
+        agentic.docker_command("n", tmp_path, tmp_path, "m", None, False, network="wide")
+
+
+def test_claude_code_gets_no_web_tools(tmp_path):
+    cmd = agentic.docker_command("n", tmp_path, tmp_path, "claude-sonnet-5-5", "low", False)
+    i = cmd.index("--disallowedTools")
+    assert cmd[i + 1:i + 4] == ["Agent", "WebFetch", "WebSearch"]
+    assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" in _env_values(cmd)
+
+
+def test_the_allowlist_lets_builds_and_model_apis_through_but_not_code_hosts():
+    import re
+    rules = [re.compile(line, re.I) for line in
+             (Path(agentic.__file__).parent / "docker" / "egress" / "allowlist.txt")
+             .read_text().split() if line]
+    allowed = lambda host: any(r.search(host) for r in rules)            # noqa: E731
+    for host in ("api.anthropic.com", "opencode.ai", "repo.maven.apache.org",
+                 "repo1.maven.org", "registry.npmjs.org"):
+        assert allowed(host), host
+    for host in ("github.com", "raw.githubusercontent.com", "api.github.com",
+                 "codeload.github.com", "gitlab.com", "www.google.com",
+                 "storage.googleapis.com", "evil-repo.maven.apache.org.example.com"):
+        assert not allowed(host), host
+
+
+def _fake_docker(monkeypatch, answers):
+    """docker faked: the first answer whose key is in the command line wins."""
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(cmd)
+        line = " ".join(cmd)
+        for key, (rc, out) in answers.items():
+            if key in line:
+                return subprocess.CompletedProcess(cmd, rc, out, "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(agentic.subprocess, "run", run)
+    return seen
+
+
+def test_a_batch_proves_the_lock_before_spending_anything(monkeypatch):
+    monkeypatch.setattr(agentic, "prepare_network", REAL_PREPARE_NETWORK)
+    seen = _fake_docker(monkeypatch, {
+        "network inspect": (0, "true"), "inspect --format {{.State.Running}}": (0, "false"),
+        "--entrypoint sh": (0, "allowed=200 blocked=000 direct=000")})
+    agentic.prepare_network(agentic.NETWORK_ALLOWLIST)
+    lines = [" ".join(c) for c in seen]
+    assert any(f"run -d --rm --name {agentic.EGRESS_NAME}" in ln for ln in lines)
+    assert any(f"network connect {agentic.SANDBOX_NETWORK} {agentic.EGRESS_NAME}" in ln for ln in lines)
+    assert any("--entrypoint sh" in ln and agentic.EGRESS_PROBE_BLOCKED in ln for ln in lines)
+
+
+@pytest.mark.parametrize("probe", [
+    "allowed=200 blocked=200 direct=000",     # the proxy lets GitHub through
+    "allowed=200 blocked=000 direct=200",     # the sandbox gets out without the proxy
+    "allowed=000 blocked=000 direct=000",     # nothing works: builds would fail
+])
+def test_a_leaky_or_broken_lock_stops_the_batch(monkeypatch, probe):
+    monkeypatch.setattr(agentic, "prepare_network", REAL_PREPARE_NETWORK)
+    _fake_docker(monkeypatch, {"network inspect": (0, "true"),
+                               "inspect --format {{.State.Running}}": (0, "true"),
+                               "--entrypoint sh": (0, probe)})
+    with pytest.raises(agentic.NotReady, match="sandbox network check failed"):
+        agentic.prepare_network(agentic.NETWORK_ALLOWLIST)
+
+
+def test_a_sandbox_network_that_is_not_internal_is_refused(monkeypatch):
+    monkeypatch.setattr(agentic, "prepare_network", REAL_PREPARE_NETWORK)
+    _fake_docker(monkeypatch, {"network inspect": (0, "false")})
+    with pytest.raises(agentic.NotReady, match="not internal"):
+        agentic.prepare_network(agentic.NETWORK_ALLOWLIST)
+
+
+def test_an_open_network_batch_starts_no_proxy(monkeypatch):
+    monkeypatch.setattr(agentic, "prepare_network", REAL_PREPARE_NETWORK)
+    seen = _fake_docker(monkeypatch, {})
+    agentic.prepare_network(agentic.NETWORK_OPEN)
+    assert seen == []
+
+
+def test_each_attempt_records_the_hosts_it_reached_and_the_ones_refused(env, monkeypatch):
+    monkeypatch.setattr(agentic, "egress_since", REAL_EGRESS_SINCE)
+    log = ('CONNECT   Nov 02 05:45:00.462 [1]: Established connection to host '
+           '"repo.maven.apache.org" using file descriptor 5.\n'
+           'NOTICE    Nov 02 05:45:02.060 [1]: Proxying refused on filtered domain "github.com"\n'
+           'NOTICE    Nov 02 05:45:03.060 [1]: Proxying refused on filtered domain "github.com"\n')
+    _fake_docker(monkeypatch, {"logs --since": (0, log)})
+    monkeypatch.setattr(agentic.subprocess, "Popen", lambda cmd, **kw: _FakeAgent(
+        cmd, lambda ws: (ws / "pom.xml").write_text("<boot3/>"), _stream()))
+    res = _attempt(env)
+    assert res.network == "allowlist"
+    assert res.egress_hosts == ["repo.maven.apache.org"] and res.blocked_hosts == ["github.com"]
+
+
+def test_r1b_gets_the_migrated_test_suite_its_prompt_promises(monkeypatch, tmp_path):
+    """Until 2026-11-02 the workspace held the original Boot 2 tests although the
+    prompt says src/test is already migrated: every agent migrated them itself."""
+    import scorers.base
+    from scorers.r1b_scorer import HIDDEN_TESTS
+    front = tmp_path / "cache" / "r1b_jhipster_boot3" / "frontend"
+    (front / "node_modules" / ".bin").mkdir(parents=True)
+    (front / "node_modules" / ".bin" / "cypress").write_text("")
+    (front / "src" / "test" / "java").mkdir(parents=True)
+    (front / "src" / "test" / "java" / "Boot2Test.java").write_text("import javax.persistence.Id;")
+    (front / "pom.xml").write_text("<boot2/>")
+    monkeypatch.setattr(scorers.base, "cache_dir", lambda: tmp_path / "cache")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    agentic._setup_r1b(ws)
+    assert not (ws / "src" / "test" / "java" / "Boot2Test.java").exists()
+    want = sorted(p.relative_to(HIDDEN_TESTS).as_posix() for p in HIDDEN_TESTS.rglob("*") if p.is_file())
+    got = sorted(p.relative_to(ws / "src" / "test").as_posix()
+                 for p in (ws / "src" / "test").rglob("*") if p.is_file())
+    assert got == want
+    assert not agentic._match("src/test/java/x/AccountResourceIT.java",
+                              agentic.CASES["r1b_jhipster_boot3"].deliverables)   # never scored

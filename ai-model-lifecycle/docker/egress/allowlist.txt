@@ -1,0 +1,11 @@
+^api\.anthropic\.com$
+^statsig\.anthropic\.com$
+^opencode\.ai$
+^models\.dev$
+^models\.opencode\.ai$
+^repo\.maven\.apache\.org$
+^repo1\.maven\.org$
+^registry\.npmjs\.org$
+^nodejs\.org$
+^download\.cypress\.io$
+^cdn\.cypress\.io$

@@ -4,7 +4,10 @@
 #   Node 20 + Chromium    r1b (Cypress), r2 (Angular)
 #   PostgreSQL 17         r3, r4, r5 (started by the entrypoint)
 #   Java 8 (/opt/java8)   r2: the original GWT app's App Engine dev server
+#   chromium-driver       browser checks (agents downloaded it at run time before)
 # Model-written code runs only in here; the workspace is the one mount it can write.
+# At run time the container has no internet of its own: agentic.py puts it on
+# an internal network whose only way out is the allowlist proxy (docker/egress).
 FROM node:20.18.0-bookworm-slim AS node
 FROM eclipse-temurin:8-jdk AS java8
 
@@ -14,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg less procps python3 unzip xz-utils \
         openjdk-17-jdk-headless maven \
-        chromium xvfb xauth libgtk-3-0 libnotify4 libgbm1 libnss3 libxss1 libasound2 libxtst6 \
+        chromium chromium-driver xvfb xauth libgtk-3-0 libnotify4 libgbm1 libnss3 libxss1 libasound2 libxtst6 \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \

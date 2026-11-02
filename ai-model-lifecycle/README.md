@@ -53,6 +53,7 @@ Two ways a model is tested; see [docs/AGENTIC.md](docs/AGENTIC.md):
 ```bash
 # agentic migration: one-time setup, then a pair's Claude Code model on every task
 docker build -t gate1-agent:latest docker/agent
+docker build -t gate1-egress:latest docker/egress   # the sandbox's allowlist proxy
 claude setup-token        # then add CLAUDE_CODE_OAUTH_TOKEN=... to .env
 python agentic.py --pair sonnet-5.5-cc-vs-deepseek-v4-pro --role current
 python agentic.py --pair sonnet-5.5-cc-vs-deepseek-v4-pro --role current \

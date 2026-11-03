@@ -96,7 +96,17 @@ SYSTEM_NOTE = (
     "the current directory (/work). Work the way you would on a real project: read "
     "the code, make the changes, build, run the tests, read the errors and fix them, "
     "until the goal is met. Do not delete, skip or disable tests to make them pass. "
-    "There is no human to ask; make reasonable decisions and keep going."
+    "There is no human to ask; make reasonable decisions and keep going.\n\n"
+    # Said, not only enforced: the allowlist proxy blocks websites, but npm must
+    # stay reachable for builds, and on r1b GLM-5.3 read generator-jhipster's
+    # templates from npm when GitHub was refused (2026-11-02). Agents had not
+    # been told answer sources were off-limits; now they are (owner's request).
+    "Internet access: the sandbox reaches only the model API and the package "
+    "registries a build needs (Maven Central, npm); every other site is blocked. Use "
+    "the registries only to install the project's dependencies. Do not look up, "
+    "download or copy a published solution, a newer version of this project, or the "
+    "generator or templates it was made from, from any source, npm included. The "
+    "result must be your own migration of the code in /work."
 )
 
 
@@ -150,8 +160,17 @@ def _setup_r1b(ws: Path) -> None:
     # agent had to migrate them itself just to check its work (all ten r1b
     # sessions did). src/test is not a deliverable, and the scorer swaps in its
     # own copy, so edits there still change nothing.
-    shutil.rmtree(ws / "src" / "test", ignore_errors=True)
-    _copy(HIDDEN_TESTS, ws / "src" / "test")
+    # Only the parts the suite holds (java/, resources/) are replaced: the
+    # Cypress suite in src/test/javascript needs no migration and stays. On
+    # 2026-11-02 the whole of src/test was replaced, which deleted it; both r1b
+    # re-runs restored it with `git checkout`.
+    for part in HIDDEN_TESTS.iterdir():
+        dest = ws / "src" / "test" / part.name
+        if dest.is_dir() and not dest.is_symlink():
+            shutil.rmtree(dest)
+        elif dest.exists() or dest.is_symlink():
+            dest.unlink()
+        _copy(part, dest)
 
 
 _R2_BACKEND = """#!/bin/sh
@@ -235,7 +254,9 @@ CASES: dict[str, AgenticCase] = {
                    "frontend, with node_modules installed). Change the backend only; "
                    "leave the frontend under src/main/webapp unchanged. Java 17, Maven "
                    "(./mvnw), Node and Chromium are installed (CHROME_BIN is set; Cypress "
-                   "can use `--browser chromium` or electron)."),
+                   "can use `--browser chromium` or electron). Off-limits: "
+                   "jhipster-sample-app in any version other than the one here, and "
+                   "generator-jhipster (its templates describe the answer)."),
     ),
     "r2_gwt_to_angular": AgenticCase(
         goal=("`npx ng build` succeeds; and served at http://localhost:8888/ng/ by "
@@ -634,6 +655,12 @@ OPENCODE_ENV_FLAGS = {
 }
 
 
+# opencode tool permissions denied in every attempt: the counterpart of
+# CLAUDE_DISALLOWED_TOOLS. Action names are opencode's tool ids (the stream
+# logs `webfetch` and `websearch`; v2 renamed v1's `task` to `subagent`).
+OPENCODE_DENIED_ACTIONS = ("subagent", "webfetch", "websearch")
+
+
 def opencode_config(model_id: str, effort: str | None) -> dict[str, Any]:
     """The per-attempt opencode config (opencode v2 schema, checked against
     v2.2.5's `debug config` / `debug agents`). No secrets: the key arrives by
@@ -641,8 +668,9 @@ def opencode_config(model_id: str, effort: str | None) -> dict[str, Any]:
 
     - only the OpenCode Go provider may be used, so a wrong model id can never
       fall through to opencode's pay-as-you-go provider;
-    - every tool is allowed except sub-agents, as Claude Code runs with the
-      Agent tool disallowed;
+    - every tool is allowed except sub-agents and the web tools, as Claude
+      Code runs with Agent, WebFetch and WebSearch disallowed (the proxy
+      refuses webfetch anyway; websearch may run through opencode's servers);
     - no MCP servers, plugins, LSP, formatter (it would rewrite the model's
       files), snapshots or sharing;
     - the thinking level goes in the build agent's request body as
@@ -663,7 +691,8 @@ def opencode_config(model_id: str, effort: str | None) -> dict[str, Any]:
         ],
         "permissions": [
             {"action": "*", "resource": "*", "effect": "allow"},
-            {"action": "subagent", "resource": "*", "effect": "deny"},
+            *({"action": action, "resource": "*", "effect": "deny"}
+              for action in OPENCODE_DENIED_ACTIONS),
         ],
         "instructions": ["/gate1/system.md"],
         "mcp": {}, "plugins": [], "lsp": False, "formatter": False,

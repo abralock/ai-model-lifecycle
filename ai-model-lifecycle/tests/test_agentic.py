@@ -466,7 +466,10 @@ def test_opencode_config_allows_only_go_and_no_sub_agents(tmp_path):
     assert cfg["policies"] == [
         {"action": "provider.use", "resource": "*", "effect": "deny"},
         {"action": "provider.use", "resource": "opencode-go", "effect": "allow"}]
-    assert cfg["permissions"][-1] == {"action": "subagent", "resource": "*", "effect": "deny"}
+    assert cfg["permissions"][0] == {"action": "*", "resource": "*", "effect": "allow"}
+    # the counterpart of Claude Code's --disallowedTools Agent WebFetch WebSearch
+    assert cfg["permissions"][1:] == [
+        {"action": a, "resource": "*", "effect": "deny"} for a in ("subagent", "webfetch", "websearch")]
     assert cfg["model"] == {"providerID": "opencode-go", "model": "kimi-k3"}
     assert cfg["agents"]["build"]["request"]["body"] == {"reasoning_effort": "low"}
     assert cfg["agents"]["title"]["model"] == cfg["model"]
@@ -753,6 +756,9 @@ def test_r1b_gets_the_migrated_test_suite_its_prompt_promises(monkeypatch, tmp_p
     (front / "node_modules" / ".bin" / "cypress").write_text("")
     (front / "src" / "test" / "java").mkdir(parents=True)
     (front / "src" / "test" / "java" / "Boot2Test.java").write_text("import javax.persistence.Id;")
+    cypress = front / "src" / "test" / "javascript" / "cypress" / "e2e" / "login-page.cy.ts"
+    cypress.parent.mkdir(parents=True)
+    cypress.write_text("describe('login')")
     (front / "pom.xml").write_text("<boot2/>")
     monkeypatch.setattr(scorers.base, "cache_dir", lambda: tmp_path / "cache")
     ws = tmp_path / "ws"
@@ -761,7 +767,25 @@ def test_r1b_gets_the_migrated_test_suite_its_prompt_promises(monkeypatch, tmp_p
     assert not (ws / "src" / "test" / "java" / "Boot2Test.java").exists()
     want = sorted(p.relative_to(HIDDEN_TESTS).as_posix() for p in HIDDEN_TESTS.rglob("*") if p.is_file())
     got = sorted(p.relative_to(ws / "src" / "test").as_posix()
-                 for p in (ws / "src" / "test").rglob("*") if p.is_file())
+                 for p in (ws / "src" / "test").rglob("*")
+                 if p.is_file() and not p.relative_to(ws / "src" / "test").as_posix().startswith("javascript/"))
     assert got == want
+    # the Cypress suite needs no migration and stays (2026-11-02 deleted it)
+    assert (ws / "src" / "test" / "javascript" / "cypress" / "e2e" / "login-page.cy.ts").read_text() \
+        == "describe('login')"
     assert not agentic._match("src/test/java/x/AccountResourceIT.java",
                               agentic.CASES["r1b_jhipster_boot3"].deliverables)   # never scored
+
+
+def test_every_agent_is_told_answer_sources_are_off_limits():
+    """The proxy blocks websites but must let npm through for builds; on r1b
+    GLM-5.3 read generator-jhipster's templates from npm (2026-11-02). Agents
+    had not been told; now every task's system text says so, and r1b names
+    the two sources."""
+    note = agentic.SYSTEM_NOTE
+    assert "Maven Central, npm" in note and "every other site is blocked" in note
+    assert "npm included" in note and "your own migration" in note
+    r1b = agentic.task_prompt("r1b_jhipster_boot3")
+    assert "jhipster-sample-app" in r1b and "generator-jhipster" in r1b
+    # r1b-specific names stay out of the other tasks
+    assert "generator-jhipster" not in agentic.task_prompt("r1_springboot2to3")

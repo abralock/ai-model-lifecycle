@@ -53,9 +53,19 @@ small proxy (tinyproxy, `docker/egress/`) that forwards to the hosts in
 | `registry.npmjs.org`, `nodejs.org` | npm packages; the Node that JHipster's build installs |
 | `download.cypress.io`, `cdn.cypress.io` | the Cypress binary |
 
-GitHub and every other code host or website are refused. Claude Code also runs
-without its web tools (`--disallowedTools Agent WebFetch WebSearch`); opencode's
-`webfetch` runs inside the sandbox, so the proxy refuses it the same way.
+GitHub and every other code host or website are refused. Both agents also run
+without their web tools: Claude Code with `--disallowedTools Agent WebFetch
+WebSearch`, opencode with the `webfetch` and `websearch` permissions denied
+(`OPENCODE_DENIED_ACTIONS`). opencode's `webfetch` runs inside the sandbox, so
+the proxy refused it anyway; its `websearch` may run through opencode's own
+servers, which are allowed, so it had to be switched off.
+
+**The agents are told, too.** Every agent's system text (`SYSTEM_NOTE`) says
+what the sandbox reaches, that the registries are for dependencies only, and
+that a published solution, a newer version of the project, or the generator or
+templates it was made from are off-limits from any source, npm included. r1b's
+task note names `jhipster-sample-app` (other versions) and `generator-jhipster`.
+Before this the rule was only enforced, never stated (see Residual risk).
 
 * **Why.** Until 2026-11-01 the sandbox was open. On r1b two agents
   (GLM-5.3 and Haiku 5.5 at high) downloaded JHipster's own published Boot 3
@@ -74,7 +84,10 @@ without its web tools (`--disallowedTools Agent WebFetch WebSearch`); opencode's
   their own servers.
 * **Residual risk.** npm hosts `generator-jhipster`, whose templates describe
   a JHipster 8 app; `egress_hosts` shows whether an attempt used the npm
-  registry at all (r1b and r2 ship with node_modules installed).
+  registry at all (r1b and r2 ship with node_modules installed). GLM-5.3's
+  r1b re-run of 2026-11-02 read those templates when GitHub was refused, so
+  the agents are now told (above); the proxy cannot tell a dependency from a
+  template, so this rule is stated and checked in the logs, not enforced.
 * **Debugging only:** `--network open` puts the sandbox on Docker's default
   bridge (the old behavior). Never use it for a scored run; records say
   `"network": "open"`.
@@ -96,7 +109,7 @@ are shared.
 | Login | `CLAUDE_CODE_OAUTH_TOKEN` (subscription) | `OPENCODE_GO_API_KEY`, passed as `OPENCODE_API_KEY` (Go subscription) |
 | Goal | `/goal <condition>` on stdin | the same, read by opencode v2's `/goal` |
 | Task text | `--append-system-prompt-file` | `instructions` in the per-attempt `/gate1/opencode.json` |
-| No sub-agents | `--disallowedTools Agent` | permission `subagent: deny` |
+| No sub-agents, no web tools | `--disallowedTools Agent WebFetch WebSearch` | permissions `subagent`, `webfetch`, `websearch`: deny |
 | Isolation | no MCP, no user settings | only the `opencode-go` provider (`provider.use` policy), no MCP, plugins, LSP, formatter, snapshots or project config |
 | Thinking level | `--effort` (low … max) | `reasoning_effort` in the build agent's request body (low, medium, high; Go models have no effort variants) |
 | Cost | Claude Code's estimate at API list prices | Go list price of the tokens used (`pricing.py`; quota, not a bill) |
@@ -118,7 +131,7 @@ An opencode row differs from a Claude row in both the model and the agent
 | Task | Workspace | Tools it can use to test | Delivered (scored) |
 |---|---|---|---|
 | r1 Spring Boot 2 → 3 | the module (pom.xml, src) | Maven, Java 17 | pom.xml, src/** |
-| r1b JHipster → Boot 3 | the whole app at the pinned commit, node_modules installed, with `src/test` replaced by the already-migrated suite its prompt promises (the one the scorer runs; since 2026-11-02, before that the original Boot 2 tests) | ./mvnw, Cypress (Chromium) | pom.xml, src/main/java, src/main/resources |
+| r1b JHipster → Boot 3 | the whole app at the pinned commit, node_modules installed, with `src/test/java` and `src/test/resources` replaced by the already-migrated suite its prompt promises (the one the scorer runs; since 2026-11-02, before that the original Boot 2 tests); the Cypress suite in `src/test/javascript` stays (on 2026-11-02 itself it was deleted by mistake, and both re-runs restored it from git) | ./mvnw, Cypress (Chromium) | pom.xml, src/main/java, src/main/resources |
 | r2 GWT → Angular | the Angular workspace, `gwt/`, `e2e/` | `ng build`, `sh backend/run.sh` (the original app + REST API on :8888, your build at /ng/) | src/** (the scorer restores the fixed files) |
 | r3 Oracle → Postgres | Oracle procedures, seed.sql, the Oracle result sets (`expected/`) | psql | postgres/** |
 | r4 Schema + load + index | schema.sql, target_query.sql | psql, EXPLAIN | solution.sql |

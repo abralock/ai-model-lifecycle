@@ -1,6 +1,6 @@
 # Gate 1 leaderboard
 
-> Generated: 2026-11-02T13:27:25+00:00 · live scoring: on (score cache)  
+> Generated: 2026-11-03T12:39:32+00:00 · live scoring: on (score cache)  
 > Routes: Claude Code, OpenCode Go (OpenRouter left out; `--routes all` includes it)  
 > Results: from run 20261031T114732Z on · agentic runs only (single-shot screening is in each pair's REPORT.md; `--all-results` shows it here)
 
@@ -31,7 +31,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | medium | 12/12 | 2/2 | 100% (14/14) | 6/6 | 58.8 | $3.35 |
 | 8 | Claude Haiku 5.5 (CC) | low | 13/13 | 2/2 | 100% (15/15) | 6/6 | 64.8 | $2.57 |
 | 9 | Claude Opus 5.5 (CC) | high | 12/12 | 2/2 | 100% (14/14) | 6/6 | 76.4 | $14.64 |
-| 10 | GLM-5.3 · opencode | medium | 13/13 | 1/1 | 100% (14/14) | 5/6 | 65.0 | $11.81 |
+| 10 | GLM-5.3 · opencode | medium | 14/14 | 2/2 | 100% (16/16) | 6/6 | 125.7 | $29.88 |
 
 ### r1_springboot2to3 — Spring Boot 2 → 3 (small app)
 
@@ -43,9 +43,9 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 4 | Claude Sonnet 5.5 (CC) | medium | 3/3 | 100% | 100% (12/12) | 0.8 | 0.8 | 100% | 100% | 100% | 1.30 | $0.07 | $0.07 | 5 | 20261031T120615Z |
 | 5 | Claude Opus 5.5 (CC) | medium | 3/3 | 100% | 100% (12/12) | 1.1 | 1.1 | 100% | 100% | 100% | 0.22 | $0.25 | $0.25 | 8 | 20261031T123749Z |
 | 6 | Claude Opus 5.5 (CC) | high | 3/3 | 100% | 100% (12/12) | 1.6 | 1.6 | 67% | 100% | 100% | 0.15 | $0.36 | $0.36 | 11 | 20261031T183901Z |
-| 7 | GLM-5.3 · opencode | medium | 3/3 | 100% | 100% (12/12) | 2.3 | 2.3 | 67% | 100% | 100% | 0.29 | $0.14 | $0.14 | 14 | 20261101T044458Z |
-| 8 | Claude Haiku 5.5 (CC) | low | 3/3 | 100% | 100% (12/12) | 2.9 | 2.9 | 0% | 100% | 100% | 2.13 | $0.02 | $0.02 | 16 | 20261101T011617Z |
-| 9 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 100% (12/12) | 2.9 | 2.9 | 0% | 100% | 100% | 1.55 | $0.02 | $0.02 | 16 | 20261031T121809Z |
+| 7 | Claude Haiku 5.5 (CC) | low | 3/3 | 100% | 100% (12/12) | 2.9 | 2.9 | 0% | 100% | 100% | 2.13 | $0.02 | $0.02 | 16 | 20261101T011617Z |
+| 8 | Claude Haiku 5.5 (CC) | medium | 3/3 | 100% | 100% (12/12) | 2.9 | 2.9 | 0% | 100% | 100% | 1.55 | $0.02 | $0.02 | 16 | 20261031T121809Z |
+| 9 | GLM-5.3 · opencode | medium | 4/4 | 100% | 100% (16/16) | 3.0 | 3.0 | 50% | 75% | 100% | 0.30 | $0.24 | $0.24 | 20 | 20261101T044458Z, 20261103T111833Z |
 | 10 | Claude Haiku 5.5 (CC) | high | 3/3 | 100% | 100% (12/12) | 5.1 | 5.1 | 0% | 33% | 100% | 1.62 | $0.03 | $0.03 | 24 | 20261031T165728Z |
 
 ### r3_oracle_to_postgres — Oracle → PostgreSQL procedures
@@ -106,6 +106,7 @@ Models that tried every task rank first, then by pass rate; equal pass rates are
 | 7 | Claude Haiku 5.5 (CC) | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 28.6 | 28.6 | 0% | 100% | 100% | 1.42 | $1.38 | $1.38 | 131 | 20261031T135411Z |
 | 8 | Claude Opus 5.5 (CC) | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 31.3 | 31.3 | 0% | 0% | 100% | 1.29 | $5.23 | $5.23 | 98 | 20261031T190847Z |
 | 9 | Claude Haiku 5.5 (CC) | low | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 33.2 | 33.2 | 0% | 0% | 100% | 2.45 | $1.25 | $1.25 | 127 | 20261101T013831Z |
+| 10 | GLM-5.3 · opencode | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 60.0 | 60.0 | 0% | 0% | 0% | 1.42 | $17.98 | $17.98 | 314 | 20261103T113334Z |
 | ⚑ | Claude Haiku 5.5 (CC) ⚑ | high | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 40.7 | 40.7 | 0% | 0% | 100% | 0.46 | $2.62 | $2.62 | 168 | 20261031T173531Z |
 | ⚑ | GLM-5.3 · opencode ⚑ | medium | 0/1 | 0% | 100% (52/52) | not run | not run | 48.8 | n/a | 0% | 0% | 0% | 1.08 | $12.26 | n/a | 245 | 20261101T061953Z |
 | ⚑ | GLM-5.3 · opencode ⚑ | medium | 1/1 | 100% | 100% (52/52) | 100% (140/140) | 100% (54/54) | 55.6 | 55.6 | 0% | 0% | 100% | 0.99 | $23.86 | $23.86 | 414 | 20261102T114053Z |

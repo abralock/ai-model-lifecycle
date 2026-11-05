@@ -109,6 +109,17 @@ SYSTEM_NOTE = (
     "result must be your own migration of the code in /work."
 )
 
+# A separate board's runs (leaderboard.py --track): a short name, used in a
+# file name (runs/LEADERBOARD_<track>.md).
+TRACK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def time_note(time_limit_s: int) -> str:
+    """Told to the agent only with --tell-time-limit (e.g. the r1b-10min
+    track): the main board's prompt never mentions the limit."""
+    return (f"Time limit: you have {time_limit_s / 60:g} minutes. The session is then "
+            "stopped, and whatever is in /work at that moment is scored as it stands.")
+
 
 # --------------------------------------------------------------------------- #
 # Cases                                                                        #
@@ -414,6 +425,8 @@ class AgenticResult:
     effort_override: str | None = None
     reasoning_requested: dict[str, Any] | None = None
     time_limit_s: int = DEFAULT_TIME_LIMIT_S
+    time_limit_told: bool = False       # the prompt stated the limit (--tell-time-limit)
+    track: str | None = None            # a separate board (--track); None: the main board
     goal: str = ""
     provider: str = "claude-code"       # the route: claude-code | opencode-go
     agent: str = "claude-code"          # the agent CLI: claude-code | opencode
@@ -430,6 +443,7 @@ class AgenticResult:
     thinking_time_s: float | None = None  # the model's reported thinking time
     input_tokens: int = 0
     output_tokens: int = 0
+    output_tokens_known: bool = True    # False: a Claude session stopped at the limit
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     cost_estimate_usd: float | None = None
@@ -516,8 +530,10 @@ def docker_command(name: str, ws: Path, control: Path, model: str,
            "--dangerously-skip-permissions",
            "--disallowedTools", *CLAUDE_DISALLOWED_TOOLS,
            "--setting-sources", "", "--strict-mcp-config",
-           "--output-format", "stream-json", "--verbose",
-           "--no-session-persistence"]
+           # the session is saved (the container is removed after each attempt
+           # anyway) so that, when the time limit stops it, its record can be
+           # read for the final output token counts (ClaudeCodeBackend.save_session)
+           "--output-format", "stream-json", "--verbose"]
     if effort:
         cmd += ["--effort", effort]
     return cmd
@@ -632,6 +648,39 @@ def _summarize_stream(lines: list[str], res: AgenticResult) -> None:
                           if ev.get("is_error") else None)
     if last_error:
         res.error = last_error
+    if res.timed_out:
+        # Stopped at the time limit. If the model replied after the last
+        # result event (or there was none), Claude Code never reported that
+        # stretch. Count the model's replies instead (one id per API reply,
+        # repeated per content block) and take each reply's input and cache
+        # tokens, which match the result events exactly. Its output tokens do
+        # not: the stream shows them before the reply is finished, so they
+        # stay unknown, like cost and API time, which the result event alone
+        # reports (a partial running total would understate them).
+        per: dict[str, dict[str, int]] = {}
+        unreported = False
+        for line in lines:
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("type") == "result":
+                unreported = False
+                continue
+            msg = ev.get("message") if ev.get("type") == "assistant" else None
+            if isinstance(msg, dict) and msg.get("id") and msg.get("model") != "<synthetic>":
+                usage, seen = msg.get("usage") or {}, per.setdefault(msg["id"], {})
+                unreported = True
+                for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+                    seen[k] = max(seen.get(k, 0), int(usage.get(k) or 0))
+        if unreported:
+            turns = len(per) or None
+            for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+                tokens[k] = sum(seen.get(k, 0) for seen in per.values())
+            res.output_tokens_known = False
+            res.cost_estimate_usd = res.duration_api_ms = None
     res.num_turns = turns
     res.input_tokens = tokens["input_tokens"]
     res.output_tokens = tokens["output_tokens"]
@@ -840,6 +889,28 @@ _OPENCODE_LIMIT_RE = re.compile(
     r"made no model call", re.I)
 
 
+# Claude Code's own session record inside the sandbox (the agent user's
+# home; the project is /work). It holds every reply with its final usage.
+CLAUDE_SESSION_GLOB = "/home/agent/.claude/projects/*/*.jsonl /root/.claude/projects/*/*.jsonl"
+
+
+def session_output_tokens(lines: list[str]) -> int | None:
+    """Output tokens from Claude Code's session record: each reply's final
+    count (one id per reply, repeated per content block; the largest is the
+    final one), summed. None if the record holds no reply."""
+    per: dict[str, int] = {}
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = ev.get("message") if isinstance(ev, dict) and ev.get("type") == "assistant" else None
+        if isinstance(msg, dict) and msg.get("id") and msg.get("model") != "<synthetic>":
+            out = int((msg.get("usage") or {}).get("output_tokens") or 0)
+            per[msg["id"]] = max(per.get(msg["id"], 0), out)
+    return sum(per.values()) if per else None
+
+
 # --------------------------------------------------------------------------- #
 # Backends                                                                     #
 # --------------------------------------------------------------------------- #
@@ -871,6 +942,16 @@ class ClaudeCodeBackend:
         _summarize_stream(lines, res)
         if res.duration_api_ms is not None:
             res.model_time_source = "reported"
+
+    def save_session(self, name: str) -> list[str]:
+        """Claude Code's session record, read from the still-running
+        container just before the time limit stops it: the stream shows each
+        reply's output tokens before the reply is finished, the record its
+        final count (agentic.session_output_tokens)."""
+        proc = subprocess.run(["docker", "exec", name, "sh", "-c",
+                               f"cat {CLAUDE_SESSION_GLOB} 2>/dev/null"],
+                              capture_output=True, text=True, timeout=60)
+        return proc.stdout.splitlines(keepends=True)
 
     def preflight(self) -> None:
         preflight()
@@ -1006,7 +1087,8 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
                 *, time_limit_s: int = DEFAULT_TIME_LIMIT_S, effort: str | None = None,
                 workroot: Path | None = None, score: bool = True,
                 scorer: Callable | None = None, backend=None,
-                network: str = NETWORK_ALLOWLIST) -> AgenticResult:
+                network: str = NETWORK_ALLOWLIST, track: str | None = None,
+                tell_time_limit: bool = False) -> AgenticResult:
     spec = CASES[case_id]
     backend = backend or backend_for(cfg, model)
     sources.ensure(case_id)
@@ -1014,7 +1096,8 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
                         model_name=model.name, role=role, rep=rep, run_id=run_id,
                         effort_override=effort,
                         reasoning_requested={"effort": effort} if effort else None,
-                        time_limit_s=time_limit_s, goal=spec.goal, created_at=time.time(),
+                        time_limit_s=time_limit_s, time_limit_told=tell_time_limit,
+                        track=track, goal=spec.goal, created_at=time.time(),
                         provider=backend.route, agent=backend.name,
                         agent_version=backend.version, goal_mode=backend.goal_mode,
                         network=network)
@@ -1029,8 +1112,9 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
         before = snapshot(ws, spec)
         name = f"gate1-agent-{uuid.uuid4().hex[:10]}"
         control = ws.with_name(ws.name + ".control")
+        system = SYSTEM_NOTE + (f"\n\n{time_note(time_limit_s)}" if tell_time_limit else "")
         backend.write_control(control, spec.goal,
-                              SYSTEM_NOTE + "\n\n# The task\n\n" + task_prompt(case_id),
+                              system + "\n\n# The task\n\n" + task_prompt(case_id),
                               model.id, effort)
         cmd = backend.command(name, ws, control, model.id, effort, spec.postgres, network)
         env = backend.env()
@@ -1052,10 +1136,16 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
 
             reader = threading.Thread(target=pump, daemon=True)
             reader.start()
+            session: list[str] = []
             try:
                 proc.wait(timeout=time_limit_s)
             except subprocess.TimeoutExpired:
                 res.timed_out = True
+                if hasattr(backend, "save_session"):
+                    try:
+                        session = [_redact(line, secrets) for line in backend.save_session(name)]
+                    except Exception:               # noqa: BLE001 — output tokens stay unknown
+                        session = []
                 subprocess.run(["docker", "kill", name], capture_output=True)
                 proc.wait(timeout=60)
             reader.join(timeout=30)
@@ -1063,6 +1153,10 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
         if network == NETWORK_ALLOWLIST:
             res.egress_hosts, res.blocked_hosts = egress_since(started_at)
         backend.summarize(lines, res, model.id)
+        if session:
+            out.with_suffix(".session.jsonl").write_text("".join(session), encoding="utf-8")
+            if not res.output_tokens_known and (n := session_output_tokens(session)) is not None:
+                res.output_tokens, res.output_tokens_known = n, True
         if proc.returncode not in (0, None) and not res.timed_out and res.num_turns is None:
             tail = "".join(lines[-5:]).strip()
             res.error = res.error or f"agent did not run (exit {proc.returncode}): {tail[-400:]}"
@@ -1172,7 +1266,8 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
         repeats: int = 1, time_limit_s: int = DEFAULT_TIME_LIMIT_S,
         effort: str | None = None, backend=None,
         max_spend_usd: float | None = None,
-        network: str = NETWORK_ALLOWLIST) -> tuple[str, list[AgenticResult]]:
+        network: str = NETWORK_ALLOWLIST, track: str | None = None,
+        tell_time_limit: bool = False) -> tuple[str, list[AgenticResult]]:
     pair = cfg.get_pair(pair_id)
     model = pair.current if role == "current" else pair.target
     backend = backend or backend_for(cfg, model)
@@ -1186,6 +1281,8 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
     unknown = [c for c in cases if c not in CASES]
     if unknown:
         raise ValueError(f"no agentic setup for case(s): {', '.join(unknown)}")
+    if track is not None and not TRACK_RE.match(track):
+        raise ValueError(f"--track must be lowercase letters, digits and dashes; got {track!r}")
     effort = effort or cfg.effort
     if effort and effort not in backend.efforts:
         raise ValueError(f"{backend.name} takes effort {', '.join(backend.efforts)}; got {effort!r}")
@@ -1195,7 +1292,9 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
     stop = False
     spent = 0.0
     print(f"agentic run id: {run_id}  model: {model.name}  agent: {backend.name}  "
-          f"effort: {effort or 'default'}  network: {network}")
+          f"effort: {effort or 'default'}  network: {network}"
+          + (f"  track: {track}" if track else "")
+          + (f"  time limit told: {time_limit_s / 60:g} min" if tell_time_limit else ""))
     if network == NETWORK_OPEN:
         print("warning: --network open: the sandbox can reach the whole internet, "
               "including published answers; not for scored runs", flush=True)
@@ -1205,7 +1304,7 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
                 break
             r = run_attempt(cfg, pair_id, role, model, case_id, rep, run_id,
                             time_limit_s=time_limit_s, effort=effort, backend=backend,
-                            network=network)
+                            network=network, track=track, tell_time_limit=tell_time_limit)
             results.append(r)
             status = ("INFRA " + (r.error or "")[:120] if not r.ok else
                       ("PASS" if r.passed else f"FAIL ({r.reason[:120]})"))
@@ -1247,6 +1346,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="allowlist (default): the sandbox reaches only the model APIs and "
                          "package registries, through docker/egress; open: the whole "
                          "internet (debugging only, never for scored runs)")
+    ap.add_argument("--track", help="record the attempts for a separate board "
+                                    "(leaderboard.py --track NAME), never the main one; "
+                                    "e.g. r1b-10min")
+    ap.add_argument("--tell-time-limit", action="store_true",
+                    help="state the time limit in the agent's prompt (default: not mentioned)")
     args = ap.parse_args(argv)
     load_env()
     cfg = load_config()
@@ -1256,7 +1360,8 @@ def main(argv: list[str] | None = None) -> int:
         backend.preflight()
         run(cfg, args.pair, role=args.role, case=args.case, repeats=args.repeats,
             time_limit_s=args.time_limit, effort=args.effort, backend=backend,
-            max_spend_usd=args.max_spend_usd, network=args.network)
+            max_spend_usd=args.max_spend_usd, network=args.network, track=args.track,
+            tell_time_limit=args.tell_time_limit)
     except (NotReady, ValueError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

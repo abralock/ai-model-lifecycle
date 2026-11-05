@@ -1,0 +1,15 @@
+# Agentic runs — sonnet-5.5-cc-vs-deepseek-v4-pro · run 20261105T145836Z
+
+The model works on a copy of the project inside a sandbox with an agent (Claude Code for Claude models, opencode for open-weight models): edit, build, test, fix, until its `/goal` is met or the time limit is hit; what it delivered is then scored by the case's acceptance check, including hidden tests it never saw. Infra errors (the session never ran) are left out.
+
+## Summary
+
+| Case | Model | Effort | Passed | Mean time (min) | Mean cost (USD) | Mean turns |
+|---|---|---|---:|---:|---:|---:|
+| r1b_jhipster_boot3 | Claude Sonnet 5.5 (CC) | medium | 0/1 | 10.0 | $0.00 | 31 |
+
+## Per attempt
+
+| Case | Rep | Model | Result | Time (min) | Cost (USD) | Turns | Tool calls | Files | Reason |
+|---|---:|---|---|---:|---:|---:|---:|---:|---|
+| r1b_jhipster_boot3 | 1 | Claude Sonnet 5.5 (CC) | ❌ (time limit) | 10.0 | n/a | 31 | 31 | 29 | failed checks: e2e |

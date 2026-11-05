@@ -459,7 +459,7 @@ def test_a_repair_call_that_failed_is_not_a_repair_attempt(runs):
 # Agentic migration: the primary result                                        #
 # --------------------------------------------------------------------------- #
 def _agentic(pair, rid, slug, case, rep=0, *, passed=True, ok=True, minutes=20.0, cost=2.0,
-             effort="medium", name=None, tool_s=None, api_s=None, agent=None):
+             effort="medium", name=None, tool_s=None, api_s=None, agent=None, **extra):
     d = common.RUNS_DIR / pair / "agentic" / rid
     d.mkdir(parents=True, exist_ok=True)
     rec = {"mode": "agentic", "pair_id": pair, "case_id": case, "model_slug": slug,
@@ -470,6 +470,7 @@ def _agentic(pair, rid, slug, case, rep=0, *, passed=True, ok=True, minutes=20.0
            "duration_api_ms": None if api_s is None else api_s * 1000}
     if agent:
         rec["agent"] = agent
+    rec.update(extra)
     (d / f"{slug}.{case}.{rid}{f'.r{rep}' if rep else ''}.json").write_text(json.dumps(rec))
     (d / f"{slug}.{case}.{rid}.stream.jsonl").write_text("{}\n")      # never read as a record
 
@@ -685,3 +686,70 @@ def test_an_excluded_attempt_shows_as_a_flagged_row_with_its_metrics(runs):
     assert "used the answer's blueprint" in section
     ranking = md.split("## Ranking")[1].split("###")[0]
     assert "GLM" not in ranking
+
+
+# --------------------------------------------------------------------------- #
+# A separate track (agentic.py --track), e.g. r1b in 10 minutes               #
+# --------------------------------------------------------------------------- #
+def _checks(n_pass, n=8):
+    names = ["edits_applied", "boot3", "java17", "javax_free", "build", "unit_tests",
+             "integration_tests", "e2e"][:n]
+    return {k: i < n_pass for i, k in enumerate(names)}
+
+
+def test_a_tracks_attempts_never_reach_the_main_board(runs):
+    r1b = REAL.cases[0]
+    _agentic("p", "20261105T000000Z", "sonnet", r1b, minutes=30)
+    _agentic("p", "20261105T010000Z", "sonnet", r1b, passed=False, minutes=10,
+             track="r1b-10min", timed_out=True)
+    main = leaderboard.agentic_rows(REAL.cases, score=True, scorer=fake_scorer)
+    assert main[0].by_case[r1b].attempts == 1 and main[0].by_case[r1b].passes == 1
+    track = leaderboard.agentic_rows(REAL.cases, score=True, scorer=fake_scorer,
+                                     track="r1b-10min")
+    assert track[0].by_case[r1b].attempts == 1 and track[0].by_case[r1b].passes == 0
+    assert track[0].runs == ["20261105T010000Z"]
+
+
+def test_the_track_board_ranks_failures_by_how_far_they_got(runs, monkeypatch):
+    """With a 10-minute limit most attempts may fail: they rank by checks
+    passed, then hidden tests passed, then time; a stopped Claude attempt has
+    no cost (Claude Code reports it only when the session ends)."""
+    r1b = REAL.cases[0]
+    kw = dict(passed=False, minutes=10, track="r1b-10min", timed_out=True,
+              time_limit_s=600, time_limit_told=True)
+    _agentic("p", "20261105T010000Z", "haiku", r1b, checks=_checks(5), cost=None, **kw)
+    _agentic("p", "20261105T020000Z", "opus", r1b, checks=_checks(3), cost=None, **kw)
+    _agentic("p", "20261105T030000Z", "glm", r1b, checks=_checks(5), cost=3.1,
+             agent="opencode", **{**kw, "minutes": 9.0})
+    _agentic("p", "20261105T040000Z", "sonnet", r1b, minutes=9.5, track="r1b-10min",
+             checks=_checks(8), time_limit_s=600, time_limit_told=True)
+    monkeypatch.setattr(leaderboard, "ScoreCache", lambda: fake_scorer)
+    assert leaderboard.main(["--track", "r1b-10min"]) == 0
+    md = leaderboard.track_file("r1b-10min").read_text()
+    assert not (runs / "LEADERBOARD.md").exists()
+    assert "10 min (stated in the prompt)" in md
+    order = [line.split(" | ")[1] for line in md.splitlines()
+             if line.startswith("| ") and line[2].isdigit()]
+    assert order == ["sonnet", "glm · opencode", "haiku", "opus"]
+    haiku = next(line for line in md.splitlines() if "| haiku |" in line)
+    assert "| 0/1 | 62% (5/8) |" in haiku and "| 1/1 | n/a |" in haiku
+    assert "unit_tests, integration_tests, e2e" in haiku
+    glm = next(line for line in md.splitlines() if "| glm · opencode |" in line)
+    assert "| $3.10 |" in glm
+
+
+def test_the_track_board_shows_token_spend(runs, monkeypatch):
+    """Input tokens include cache reads and writes; a Claude attempt stopped at
+    the limit has no output total (Claude Code reports it only at the end)."""
+    r1b = REAL.cases[0]
+    kw = dict(passed=False, minutes=10, track="r1b-10min", timed_out=True, checks=_checks(4))
+    _agentic("p", "20261105T010000Z", "haiku", r1b, input_tokens=200, cache_read_tokens=7_300_000,
+             cache_write_tokens=99_800, output_tokens=0, output_tokens_known=False, **kw)
+    _agentic("p", "20261105T020000Z", "glm", r1b, agent="opencode", input_tokens=40_000,
+             cache_read_tokens=2_000_000, cache_write_tokens=0, output_tokens=34_400, **kw)
+    monkeypatch.setattr(leaderboard, "ScoreCache", lambda: fake_scorer)
+    leaderboard.main(["--track", "r1b-10min"])
+    md = leaderboard.track_file("r1b-10min").read_text()
+    assert "| Input tokens | Output tokens |" in md
+    assert "| 7.4M | n/a |" in next(line for line in md.splitlines() if "| haiku |" in line)
+    assert "| 2.0M | 34k |" in next(line for line in md.splitlines() if "| glm · opencode |" in line)

@@ -140,10 +140,30 @@ class AgenticTask:
     # per test kind (unit, integration, e2e): tests passed and run, summed over
     # the attempts whose suite ran, and the number of attempts where it never ran
     tests: dict[str, dict[str, int]] = field(default_factory=dict)
+    # the scorer's acceptance checks, summed over attempts (a separate board,
+    # e.g. --track r1b-10min, ranks by how far an attempt got)
+    checks_passed: int = 0
+    checks_total: int = 0
+    checks_failed: Counter = field(default_factory=Counter)
+    timed_out: int = 0              # attempts stopped at the time limit
+    cost_known: int = 0             # attempts with a cost (none: stopped before reporting it)
+    # tokens: input counts fresh input, cache reads and cache writes; output
+    # only over attempts that reported it (a stopped Claude session did not)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    output_known: int = 0
 
     @property
     def attempts(self) -> int:
         return len(self.outcomes)
+
+    @property
+    def checks_share(self) -> float:
+        return self.checks_passed / self.checks_total if self.checks_total else 0.0
+
+    @property
+    def tests_passed(self) -> int:
+        return sum(t["passed"] for t in self.tests.values())
 
     def add_tests(self, tests: dict | None) -> None:
         for kind, t in (tests or {}).items():
@@ -245,13 +265,26 @@ def excluded_attempts() -> dict[str, str]:
 def _add_attempt(task: "AgenticTask", r: dict, case: str, slug: str, *,
                  score: bool, scorer=None) -> None:
     """Fold one scored attempt into a task's metrics."""
+    checks = None
     if score:
         sr = (scorer or score_case)(case, r.get("output_text") or "", slug)
         ok = bool(sr.passed)
         task.add_tests(getattr(sr, "tests", None)
                        or (getattr(sr, "details", None) or {}).get("tests"))
+        checks = getattr(sr, "checks", None)
     else:
         ok = bool(r.get("passed"))
+    checks = checks or r.get("checks") or {}
+    task.checks_passed += sum(1 for v in checks.values() if v)
+    task.checks_total += len(checks)
+    task.checks_failed.update(k for k, v in checks.items() if not v)
+    task.timed_out += bool(r.get("timed_out"))
+    task.cost_known += r.get("cost_estimate_usd") is not None
+    task.input_tokens += sum(int(r.get(k) or 0) for k in
+                             ("input_tokens", "cache_read_tokens", "cache_write_tokens"))
+    if r.get("output_tokens_known", True):
+        task.output_tokens += int(r.get("output_tokens") or 0)
+        task.output_known += 1
     task.outcomes.append((float(r.get("latency_s") or 0), ok))
     task.runs.add(r["_run"])
     task.cost_usd += float(r.get("cost_estimate_usd") or 0)
@@ -269,7 +302,8 @@ def _display_name(rec: dict, slug: str, agent: str) -> str:
 
 
 def flagged_rows(cases: list[str], *, score: bool, scorer=None,
-                 since: str | None = None) -> list[tuple["AgenticRow", str]]:
+                 since: str | None = None,
+                 track: str | None = None) -> list[tuple["AgenticRow", str]]:
     """Each excluded attempt (runs/EXCLUDED.json) as its own one-attempt row,
     with its reason: shown flagged under its task's table so its metrics stay
     visible, never ranked or totalled."""
@@ -284,7 +318,8 @@ def flagged_rows(cases: list[str], *, score: bool, scorer=None,
             continue
         rec = json.loads(f.read_text(encoding="utf-8"))
         case = rec.get("case_id")
-        if rec.get("mode") != "agentic" or not rec.get("ok") or case not in cases:
+        if (rec.get("mode") != "agentic" or not rec.get("ok") or case not in cases
+                or rec.get("track") != track):
             continue
         slug, agent = rec.get("model_slug", "?"), rec.get("agent") or "claude-code"
         row = AgenticRow(slug=slug, name=_display_name(rec, slug, agent) + " ⚑",
@@ -297,12 +332,13 @@ def flagged_rows(cases: list[str], *, score: bool, scorer=None,
 
 
 def agentic_rows(cases: list[str], *, score: bool, scorer=None,
-                 since: str | None = None) -> list[AgenticRow]:
+                 since: str | None = None, track: str | None = None) -> list[AgenticRow]:
     """Every agentic attempt (runs/<pair>/agentic/<run>/), pooled per model and
     effort level across pairs and runs. A session that never ran is an infra
     error and left out, and so is an attempt listed in runs/EXCLUDED.json;
     pass/fail comes from the scorer (score cache) so a scorer fix reaches old
-    attempts too."""
+    attempts too. Only the attempts of `track` count (agentic.py --track):
+    None is the main board, which never sees a track's attempts."""
     pooled: dict[tuple[str, str, str], list[dict]] = {}
     root = Path(common.RUNS_DIR)
     excluded = excluded_attempts()
@@ -313,7 +349,7 @@ def agentic_rows(cases: list[str], *, score: bool, scorer=None,
         if f.relative_to(root).as_posix() in excluded:
             continue
         rec = json.loads(f.read_text(encoding="utf-8"))
-        if rec.get("mode") != "agentic":
+        if rec.get("mode") != "agentic" or rec.get("track") != track:
             continue
         level = rec.get("effort_override") or "model default"
         # records from before the opencode backend carry no agent: Claude Code
@@ -713,6 +749,89 @@ def render_agentic(board: Board) -> list[str]:
     return lines
 
 
+def _tokens(n: float) -> str:
+    """e.g. 7.3M, 34k, 512."""
+    return (f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k" if n >= 1e3 else f"{n:.0f}")
+
+
+def track_file(track: str) -> Path:
+    return Path(common.RUNS_DIR) / f"LEADERBOARD_{track}.md"
+
+
+def render_track(track: str, rows: list[AgenticRow], cases: list[str]) -> str:
+    """A separate board for one track's attempts (agentic.py --track), e.g.
+    r1b-10min: r1b with a 10-minute limit the agent is told about. Nothing on
+    it is counted in runs/LEADERBOARD.md. Ranked by pass rate, then how far
+    the attempt got (acceptance checks passed, then hidden tests passed), then
+    time and cost: with a short limit most attempts may not pass."""
+    generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    recs = []
+    for f in sorted(Path(common.RUNS_DIR).glob("*/agentic/*/*.json")):
+        rec = json.loads(f.read_text(encoding="utf-8"))
+        if rec.get("mode") == "agentic" and rec.get("track") == track:
+            recs.append(rec)
+    limits = sorted({(int(r.get("time_limit_s") or 0), bool(r.get("time_limit_told")))
+                     for r in recs})
+    limit_text = "; ".join(f"{s / 60:g} min ({'stated in the prompt' if told else 'not stated'})"
+                           for s, told in limits) or "n/a"
+    lines = [f"# Separate board: {track}", "",
+             f"> Generated: {generated}. A separate track (agentic.py `--track {track}`): "
+             "these attempts are never counted in `runs/LEADERBOARD.md`, and the main board's "
+             "attempts are never counted here.", "",
+             f"Time limit: {limit_text}. When the limit is hit the session is stopped and what "
+             "is in the workspace is scored as it stands, with the same scorer and hidden "
+             "tests as the main board.", "",
+             "Ranked by pass rate, then by how far the attempt got: the share of the scorer's "
+             "acceptance checks that passed, then hidden tests passed, then time and cost.", ""]
+    if not rows:
+        return "\n".join(lines + [f"_No attempts on this track yet._", ""])
+    for case in cases:
+        ranked = sorted(((r, r.by_case[case]) for r in rows if case in r.by_case),
+                        key=lambda t: (-t[1].rate, -t[1].checks_share, -t[1].tests_passed,
+                                       t[1].mean_time_s, t[1].cost_usd, t[0].name))
+        if not ranked:
+            continue
+        title = CASE_TITLES.get(case)
+        kinds = [k for k in TEST_KINDS if any(k in t.tests for _, t in ranked)]
+        header = ["#", "Model", "Thinking level", "Passed", "Checks passed", "Checks failed",
+                  *[TEST_KINDS[k] for k in kinds], "Mean time (min)", "Stopped at limit",
+                  "Mean cost", "Input tokens", "Output tokens", "Mean turns", "Runs"]
+        lines += [f"## {case}" + (f" — {title}" if title else ""), "",
+                  "| " + " | ".join(header) + " |",
+                  "|---:|---|---|" + "---:|" * 2 + "---|" + "---:|" * (len(header) - 7) + "---|"]
+        for i, (row, t) in enumerate(ranked, 1):
+            failed = ", ".join(k if n == t.attempts else f"{k} ({n}/{t.attempts})"
+                               for k, n in t.checks_failed.most_common()) or "none"
+            cost = (f"${t.cost_usd / t.cost_known:.2f}" if t.cost_known else "n/a")
+            if t.cost_known and t.cost_known < t.attempts:
+                cost += f" ({t.cost_known}/{t.attempts} reported)"
+            cells = [str(i), row.name, row.level, f"{t.passes}/{t.attempts}",
+                     f"{t.checks_share * 100:.0f}% ({t.checks_passed}/{t.checks_total})",
+                     failed, *[t.tests_cell(k) for k in kinds],
+                     f"{t.mean_time_s / 60:.1f}", f"{t.timed_out}/{t.attempts}", cost,
+                     _tokens(t.input_tokens / t.attempts),
+                     (_tokens(t.output_tokens / t.output_known) if t.output_known else "n/a")
+                     + (f" ({t.output_known}/{t.attempts} reported)"
+                        if 0 < t.output_known < t.attempts else ""),
+                     f"{t.turns / t.attempts:.0f}", ", ".join(sorted(t.runs))]
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+    lines += ["Checks passed: the scorer's acceptance checks (for r1b: edits applied, Spring "
+              "Boot 3, Java 17, no javax imports, build, unit tests, integration tests, "
+              "E2E), summed over attempts; a pass needs all of them. Hidden test columns as "
+              "on the main board (\"not run\": the build stopped before that suite). Cost: "
+              "Claude Code reports cost only when its session ends, so a Claude attempt "
+              "stopped at the limit has none (n/a); opencode reports it per step. Tokens are "
+              "means per attempt: input counts fresh input plus cache reads and cache writes "
+              "(an agent re-reads its context every turn, so it is mostly cache reads); "
+              "output includes thinking. For a Claude attempt stopped at the limit, input "
+              "tokens come from each model reply and output tokens from Claude Code's "
+              "session record, copied out before the stop (attempts from 2026-11-05 "
+              "22:47 on; earlier ones have no record, so output is n/a). Turns for a "
+              "stopped Claude attempt are its model replies.", ""]
+    return "\n".join(lines)
+
+
 def render(board: Board) -> str:
     generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     lines = [
@@ -851,7 +970,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--all-results", action="store_true",
                     help="ignore the models.yaml leaderboard policy (start run, measured-only, "
                          "effort sweeps, agentic only): every run, single-shot screening included")
+    ap.add_argument("--track", help="write the separate board of one track "
+                                    "(agentic.py --track), runs/LEADERBOARD_<track>.md, "
+                                    "instead of the main one")
     args = ap.parse_args(argv)
+    if args.track:
+        load_env()
+        score = not args.no_score
+        cases = [c for suite in SUITES for c in _cfg(suite).cases]
+        rows = agentic_rows(cases, score=score, scorer=ScoreCache() if score else None,
+                            track=args.track)
+        out = track_file(args.track)
+        out.write_text(render_track(args.track, rows, cases), encoding="utf-8")
+        print(f"wrote {out}")
+        return 0
     pol = policy()
     if args.all_results:
         pol.update(since=None, measured_only=False, include_effort=False, single_shot=True)

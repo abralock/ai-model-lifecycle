@@ -789,3 +789,100 @@ def test_every_agent_is_told_answer_sources_are_off_limits():
     assert "jhipster-sample-app" in r1b and "generator-jhipster" in r1b
     # r1b-specific names stay out of the other tasks
     assert "generator-jhipster" not in agentic.task_prompt("r1_springboot2to3")
+
+
+
+def test_a_track_attempt_is_tagged_and_told_its_limit_only_when_asked(env, monkeypatch):
+    """r1b-10min: a separate board, and the agent is told it has 10 minutes;
+    the main board's prompt never mentions the limit."""
+    systems = []
+    real = agentic.ClaudeCodeBackend.write_control
+    monkeypatch.setattr(agentic.ClaudeCodeBackend, "write_control",
+                        lambda self, control, goal, system, *a: (systems.append(system),
+                                                                 real(self, control, goal, system, *a)))
+    monkeypatch.setattr(agentic.subprocess, "Popen", lambda cmd, **kw: _FakeAgent(
+        cmd, lambda ws: (ws / "pom.xml").write_text("<boot3/>"), _stream()))
+    plain = _attempt(env)
+    tracked = _attempt(env, track="r1b-10min", tell_time_limit=True, time_limit_s=600)
+    assert "Time limit" not in systems[0] and plain.track is None
+    assert "you have 10 minutes" in systems[1] and "scored as it stands" in systems[1]
+    assert tracked.track == "r1b-10min" and tracked.time_limit_told
+    saved = json.loads(agentic.record_path(PAIR, "20261031T000000Z", tracked.model_slug,
+                                           "r1_springboot2to3", 0).read_text())
+    assert saved["track"] == "r1b-10min" and saved["time_limit_s"] == 600
+
+
+def test_a_track_name_must_be_safe_for_a_file_name(env):
+    with pytest.raises(ValueError, match="--track"):
+        agentic.run(env["cfg"], PAIR, case="r1_springboot2to3", track="../Bad name")
+
+
+def test_a_claude_session_stopped_at_the_limit_counts_its_replies_but_has_no_cost():
+    """No result event when the container is killed: turns are the model's
+    distinct replies (one id each, repeated per content block); cost stays unknown."""
+    ev = lambda mid, model="claude-haiku-5-5": json.dumps({"type": "assistant", "message": {
+        "id": mid, "model": model, "content": [{"type": "text", "text": "x"}],
+        "usage": {"input_tokens": 2, "cache_read_input_tokens": 1000,
+                  "cache_creation_input_tokens": 50, "output_tokens": 3}}})
+    res = agentic.AgenticResult(pair_id=PAIR, case_id="r1b_jhipster_boot3", model_slug="m",
+                                model_name="M", role="current", rep=0, run_id="r",
+                                timed_out=True)
+    agentic._summarize_stream([ev("a"), ev("a"), ev("b"), ev("s", "<synthetic>")], res)
+    assert res.num_turns == 2 and res.cost_estimate_usd is None and res.error is None
+    # input and cache tokens once per reply; output is not final in the stream
+    assert (res.input_tokens, res.cache_read_tokens, res.cache_write_tokens) == (4, 2000, 100)
+    assert res.output_tokens == 0 and res.output_tokens_known is False
+
+
+
+def test_a_claude_session_resumed_after_its_last_result_is_not_undercounted():
+    """A session that ended a turn (result event), resumed on a wake-up and was
+    then stopped: the result covers only the first stretch, so tokens come
+    from every reply and cost is unknown, not the partial running total. One
+    stopped right after its result event keeps the reported numbers."""
+    ev = lambda mid: json.dumps({"type": "assistant", "message": {
+        "id": mid, "model": "claude-haiku-5-5", "content": [],
+        "usage": {"input_tokens": 1, "cache_read_input_tokens": 100,
+                  "cache_creation_input_tokens": 10, "output_tokens": 1}}})
+    result = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                         "num_turns": 1, "total_cost_usd": 0.05, "duration_api_ms": 900,
+                         "usage": {"input_tokens": 1, "output_tokens": 70,
+                                   "cache_read_input_tokens": 100,
+                                   "cache_creation_input_tokens": 10}})
+    new = lambda: agentic.AgenticResult(pair_id=PAIR, case_id="r1b_jhipster_boot3",
+                                        model_slug="m", model_name="M", role="current",
+                                        rep=0, run_id="r", timed_out=True)
+    resumed = new()
+    agentic._summarize_stream([ev("a"), result, ev("b")], resumed)
+    assert resumed.num_turns == 2 and resumed.cache_read_tokens == 200
+    assert resumed.cost_estimate_usd is None and resumed.output_tokens_known is False
+    ended = new()
+    agentic._summarize_stream([ev("a"), result], ended)
+    assert ended.num_turns == 1 and ended.cost_estimate_usd == 0.05
+    assert ended.output_tokens == 70 and ended.output_tokens_known is True
+
+
+def test_a_stopped_claude_session_takes_its_output_tokens_from_the_session_record(env, monkeypatch):
+    """Before the time limit stops the container, Claude Code's own session
+    record is copied out: it has each reply's final output count, which the
+    stream (logged at the start of each reply) does not."""
+    reply = lambda mid, out: json.dumps({"type": "assistant", "message": {
+        "id": mid, "model": "claude-haiku-5-5", "content": [],
+        "usage": {"input_tokens": 1, "cache_read_input_tokens": 100,
+                  "cache_creation_input_tokens": 10, "output_tokens": out}}}) + "\n"
+    stream = reply("a", 2) + reply("b", 3)                    # early counts only
+    record = [reply("a", 900), reply("a", 900), reply("b", 1500),
+              json.dumps({"type": "user", "message": {"content": "x"}}) + "\n"]
+    monkeypatch.setattr(agentic.ClaudeCodeBackend, "save_session", lambda self, name: record)
+    monkeypatch.setattr(agentic.subprocess, "Popen", lambda cmd, **kw: _FakeAgent(
+        cmd, lambda ws: (ws / "pom.xml").write_text("<boot3/>"), stream, hang=True))
+    res = _attempt(env, time_limit_s=1)
+    assert res.timed_out and res.output_tokens == 2400 and res.output_tokens_known
+    assert res.cache_read_tokens == 200 and res.cost_estimate_usd is None
+    saved = agentic.record_path(PAIR, "20261031T000000Z", res.model_slug, "r1_springboot2to3", 0)
+    assert saved.with_suffix(".session.jsonl").read_text().count('"id": "a"') == 2
+
+
+def test_no_session_record_leaves_output_tokens_unknown():
+    assert agentic.session_output_tokens([]) is None
+    assert agentic.session_output_tokens(['{"type": "user"}\n']) is None

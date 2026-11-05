@@ -146,6 +146,53 @@ budgets), tool / model time, mean cost, cost per pass and turns
 (docs/METRICS_PLAN.md §8). Pass/fail is re-scored through the score cache, so a scorer fix
 reaches earlier attempts.
 
+### Separate tracks (`--track`)
+
+An experiment that must not mix with the main board runs as a track:
+
+```bash
+python agentic.py --pair sonnet-5.5-cc-vs-deepseek-v4-pro --role current --effort low \
+    --case r1b_jhipster_boot3 --time-limit 600 --track r1b-10min --tell-time-limit
+python leaderboard.py --track r1b-10min      # writes runs/LEADERBOARD_r1b-10min.md
+```
+
+* Each record carries `track`; `runs/LEADERBOARD.md` never counts a track's
+  attempts, and a track's board counts only its own.
+* `--tell-time-limit` adds to the agent's system text: "Time limit: you have
+  N minutes. The session is then stopped, and whatever is in /work at that
+  moment is scored as it stands." Without it the prompt never mentions the
+  limit (the main board's setting).
+* The track board ranks by pass rate, then by how far an attempt got: the
+  share of the scorer's acceptance checks passed (r1b: edits applied, Boot 3,
+  Java 17, no javax, build, unit, integration, E2E), then hidden tests passed,
+  then time and cost. It lists the checks that failed, whether each attempt
+  was stopped at the limit, and mean input and output tokens.
+* First track, `r1b-10min` (2026-11-05): r1b with a 10-minute limit the agent
+  is told about, at the peers' request (are faster models better when time is
+  short?).
+
+### Tokens and cost of a session stopped at the time limit
+
+Claude Code reports cost, API time and total output tokens only in the result
+event it writes when a session ends; a session the time limit stops has none.
+So, for a stopped Claude Code session:
+
+* **Turns and input tokens** come from the stream: one id per model reply,
+  and each reply's input, cache-read and cache-write tokens, which match the
+  result event exactly (checked on the 60-minute r1b runs).
+* **Output tokens** come from Claude Code's own session record, copied out of
+  the container just before it is stopped (`ClaudeCodeBackend.save_session`,
+  kept as `<record>.session.jsonl`, secrets redacted). The stream logs each
+  reply's output count before the reply is finished (a 90-second test: 164 in
+  the stream against 14,675 in the record), so it is never used. The sandbox
+  therefore runs Claude Code without `--no-session-persistence`; the
+  container is removed after each attempt, so nothing outlives it.
+* **Cost and API time** stay unknown (n/a). A session that wrote a result
+  event and then resumed before being stopped is treated the same way, so a
+  partial running total is never reported as the session's.
+
+opencode reports tokens and cost per step, so its stopped sessions are complete.
+
 ## Limits
 
 * Agentic attempts take tens of minutes each and use the subscription's usage

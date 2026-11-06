@@ -88,7 +88,7 @@ The Claude runs used the subscription; these are API-price equivalents.
 | Opus 5.5 high (finished at 7.6 min) | $1.14, Claude Code's own |
 | Opus medium / low | ≈ $0.78 / $0.59 |
 | Sonnet high / low / medium | ≈ $0.64 / $0.54 / $0.40 |
-| Haiku high / low / medium | ≈ $0.07 / $0.06 / $0.05 (no request over 100K) |
+| Haiku high / low / medium | ≈ $0.06 / $0.06 / $0.05 (no request over 100K) |
 | GLM-5.3 (run 1, opencode) | $1.59 Go credit |
 
 Haiku uses the most tokens but costs about a tenth of Sonnet or Opus.

@@ -512,19 +512,22 @@ def test_mlflow_cost_source_tag():
     assert mlflow_export._cost_source_tag([_rec("t", slug, estimate=0.5), _rec("t", slug)]) == "price table"
 
 
-def test_price_reference_hidden_when_unused_and_unpriced():
-    """The -cc ids have no pricing.py row: showing the $3/$15 fallback as a
-    "price reference" when every run has an estimate is misleading."""
+def test_price_reference_shows_real_claude_code_prices():
+    """The -cc ids now have pricing.py rows (Anthropic list prices, checked
+    against Claude Code's own cost), so the reference shows those prices,
+    never the $3/$15 fallback."""
     cfg = load_config()
     pair = cfg.get_pair(PAIR)
     runs = [_rec("current", pair.current.id, estimate=0.5),
             _rec("target", pair.target.id, estimate=0.1)]
     md = report.render_pair(cfg, PAIR, report.aggregate(runs, score=False), runs, score=False)
-    assert "Price reference" not in md
-    # ...but shown when a run fell back to the table (the prices it used)
-    runs[1]["cost_estimate_usd"] = None
-    md = report.render_pair(cfg, PAIR, report.aggregate(runs, score=False), runs, score=False)
     assert "Price reference" in md
+    ref = md[md.index("Price reference"):]
+    for mref in (pair.current, pair.target):
+        price = report.get_price(mref.id)
+        if price is not report.DEFAULT_PRICE:
+            assert f"| {mref.name} | {price.input} | {price.output} |" in ref
+    assert f"| {report.DEFAULT_PRICE.input} | {report.DEFAULT_PRICE.output} |" not in ref
 
 
 def test_price_reference_kept_for_priced_models():

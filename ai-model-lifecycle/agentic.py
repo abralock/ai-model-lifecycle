@@ -448,6 +448,7 @@ class AgenticResult:
     cache_write_tokens: int = 0
     cost_estimate_usd: float | None = None
     cost_reported_usd: float | None = None   # opencode's own per-step cost sum
+    cost_from_prices_usd: float | None = None  # a stopped Claude session, priced from its record
     reasoning_tokens: int = 0                # opencode: reported separately (also in output_tokens)
     model_time_source: str | None = None     # "reported" (Claude Code) | "derived" (opencode)
     agent_error: str | None = None           # an agent error that ended the session (scored)
@@ -894,11 +895,11 @@ _OPENCODE_LIMIT_RE = re.compile(
 CLAUDE_SESSION_GLOB = "/home/agent/.claude/projects/*/*.jsonl /root/.claude/projects/*/*.jsonl"
 
 
-def session_output_tokens(lines: list[str]) -> int | None:
-    """Output tokens from Claude Code's session record: each reply's final
-    count (one id per reply, repeated per content block; the largest is the
-    final one), summed. None if the record holds no reply."""
-    per: dict[str, int] = {}
+def _session_replies(lines: list[str]) -> dict[str, tuple[str, dict]]:
+    """Each model reply in Claude Code's session record: id -> (model, usage).
+    A reply repeats per content block; its usage grows to the final counts, so
+    the largest output count is kept (input and cache counts do not change)."""
+    per: dict[str, tuple[str, dict]] = {}
     for line in lines:
         try:
             ev = json.loads(line)
@@ -906,9 +907,31 @@ def session_output_tokens(lines: list[str]) -> int | None:
             continue
         msg = ev.get("message") if isinstance(ev, dict) and ev.get("type") == "assistant" else None
         if isinstance(msg, dict) and msg.get("id") and msg.get("model") != "<synthetic>":
-            out = int((msg.get("usage") or {}).get("output_tokens") or 0)
-            per[msg["id"]] = max(per.get(msg["id"], 0), out)
-    return sum(per.values()) if per else None
+            usage = msg.get("usage") or {}
+            seen = per.get(msg["id"])
+            if seen is None or int(usage.get("output_tokens") or 0) >= int(seen[1].get("output_tokens") or 0):
+                per[msg["id"]] = (str(msg.get("model") or ""), usage)
+    return per
+
+
+def session_output_tokens(lines: list[str]) -> int | None:
+    """Output tokens from Claude Code's session record: each reply's final
+    count, summed. None if the record holds no reply."""
+    per = _session_replies(lines)
+    return sum(int(u.get("output_tokens") or 0) for _, u in per.values()) if per else None
+
+
+def session_cost_usd(lines: list[str]) -> float | None:
+    """API list-price cost of a Claude Code session from its session record,
+    priced per request (pricing.usage_cost_usd: 1-hour cache writes, Haiku's
+    long-context tier). For a session stopped at the time limit, which Claude
+    Code never prices. Leaves out Claude Code's own background calls, which
+    the record does not hold (about 1% of a session's cost). None if the record
+    holds no reply or a model the price table does not know."""
+    per = _session_replies(lines)
+    if not per or any(m not in pricing.PRICES for m, _ in per.values()):
+        return None
+    return round(sum(pricing.usage_cost_usd(m, u) for m, u in per.values()), 6)
 
 
 # --------------------------------------------------------------------------- #
@@ -1157,6 +1180,8 @@ def run_attempt(cfg, pair_id: str, role: str, model, case_id: str, rep: int, run
             out.with_suffix(".session.jsonl").write_text("".join(session), encoding="utf-8")
             if not res.output_tokens_known and (n := session_output_tokens(session)) is not None:
                 res.output_tokens, res.output_tokens_known = n, True
+            if res.cost_estimate_usd is None:
+                res.cost_from_prices_usd = session_cost_usd(session)
         if proc.returncode not in (0, None) and not res.timed_out and res.num_turns is None:
             tail = "".join(lines[-5:]).strip()
             res.error = res.error or f"agent did not run (exit {proc.returncode}): {tail[-400:]}"

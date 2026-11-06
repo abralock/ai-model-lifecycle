@@ -759,6 +759,16 @@ def _tokens(n: float) -> str:
     return (f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k" if n >= 1e3 else f"{n:.0f}")
 
 
+# What each task's acceptance checks are, in the scorer's order, for the track
+# board's note (a board names only the tasks it shows).
+CASE_CHECKS = {
+    "r1b_jhipster_boot3": "edits applied, Spring Boot 3, Java 17, no javax imports, build, "
+                          "unit tests, integration tests, E2E",
+    "r2_gwt_to_angular": "edits applied, Angular app present, production build, the UI "
+                         "parity suite (Playwright), the UI-vs-REST-API integration suite",
+}
+
+
 def track_file(track: str) -> Path:
     return Path(common.RUNS_DIR) / f"LEADERBOARD_{track}.md"
 
@@ -790,12 +800,14 @@ def render_track(track: str, rows: list[AgenticRow], cases: list[str]) -> str:
              "acceptance checks that passed, then hidden tests passed, then time and cost.", ""]
     if not rows:
         return "\n".join(lines + [f"_No attempts on this track yet._", ""])
+    shown = []
     for case in cases:
         ranked = sorted(((r, r.by_case[case]) for r in rows if case in r.by_case),
                         key=lambda t: (-t[1].rate, -t[1].checks_share, -t[1].tests_passed,
                                        t[1].mean_time_s, t[1].cost_usd, t[0].name))
         if not ranked:
             continue
+        shown.append(case)
         title = CASE_TITLES.get(case)
         kinds = [k for k in TEST_KINDS if any(k in t.tests for _, t in ranked)]
         header = ["#", "Model", "Thinking level", "Passed", "Checks passed", "Checks failed",
@@ -823,9 +835,11 @@ def render_track(track: str, rows: list[AgenticRow], cases: list[str]) -> str:
                      f"{t.turns / t.attempts:.0f}", ", ".join(sorted(t.runs))]
             lines.append("| " + " | ".join(cells) + " |")
         lines.append("")
-    lines += ["Checks passed: the scorer's acceptance checks (for r1b: edits applied, Spring "
-              "Boot 3, Java 17, no javax imports, build, unit tests, integration tests, "
-              "E2E), summed over attempts; a pass needs all of them. Hidden test columns as "
+    checks = "; ".join(f"{c}, {CASE_CHECKS[c].count(',') + 1}: {CASE_CHECKS[c]}"
+                       for c in shown if c in CASE_CHECKS)
+    lines += ["Checks passed: the scorer's acceptance checks"
+              + (f" ({checks})" if checks else "")
+              + ", summed over attempts; a pass needs all of them. Hidden test columns as "
               "on the main board (\"not run\": the build stopped before that suite). Cost: "
               "Claude Code reports cost only when its session ends, so a Claude attempt "
               "stopped at the limit is priced from its session record instead (≈: every "

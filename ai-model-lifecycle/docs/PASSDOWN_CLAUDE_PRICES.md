@@ -14,7 +14,7 @@ Claude Code session. Read it top to bottom before re-running anything.
 | Stopped-session cost | `agentic.py`: `session_cost_usd()`, record field `cost_from_prices_usd` |
 | Track boards | `leaderboard.py` `render_track`: cost column, marked `≈` when priced |
 | Tests | `tests/test_pricing.py` (new), `tests/test_claude_code_gateway.py` (one test rewritten) |
-| Deck | https://claude.ai/artifact/NDs6WhZJx789q2iVzfDrVU ("Gate 1 Agentic Results", private): **new slide 38**, the run-2 ranking with GLM-5.3 and estimated costs; backup slides moved to 39–42 |
+| Deck | https://claude.ai/artifact/NDs6WhZJx789q2iVzfDrVU ("Gate 1 Agentic Results", private): **new slide 38**, the run-2 ranking with GLM-5.3, checks passed as a percentage and estimated costs; **new slide 39**, what the 8 checks mean (8/8, 7/8, 4/8); backup slides moved to 40–43 |
 | Stand-alone slide | https://claude.ai/artifact/LnCE7R29CRVndumtNd38cR (private): the same ranking as one page, before the cost column was added; delete if unneeded |
 | Previous passdown | `docs/PASSDOWN_R1B_10MIN.md` (PR #59) |
 
@@ -106,7 +106,7 @@ python leaderboard.py --track r1b-10min           # run 1: unchanged except the 
 ```
 
 Then commit the two board files to the branch (or after merge), and copy the
-new cost column onto deck slide 42 (run 2 raw data, 2 of 2), which still shows
+new cost column onto deck slide 43 (run 2 raw data, 2 of 2), which still shows
 n/a. Slide 38 already has the costs.
 
 To price another stopped session by hand:
@@ -145,7 +145,7 @@ agentic.session_cost_usd(open("<record>.session.jsonl").readlines())
 
 1. Open the PR (description drafted in the session), review, merge.
 2. Re-run the full test suite on the home PC.
-3. Regenerate both 10-minute boards and update deck slide 42.
+3. Regenerate both 10-minute boards and update deck slide 43.
 4. Decide whether `-cc` pair reports should show the price reference (now
    shown, with real prices) or keep it hidden for Claude Code pairs.
 5. Optional: the main board and run 1 could also use priced costs for any

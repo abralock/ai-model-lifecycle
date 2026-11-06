@@ -147,6 +147,8 @@ class AgenticTask:
     checks_failed: Counter = field(default_factory=Counter)
     timed_out: int = 0              # attempts stopped at the time limit
     cost_known: int = 0             # attempts with a cost (none: stopped before reporting it)
+    cost_priced: int = 0            # attempts without one, priced from Claude Code's session record
+    cost_priced_usd: float = 0.0
     # tokens: input counts fresh input, cache reads and cache writes; output
     # only over attempts that reported it (a stopped Claude session did not)
     input_tokens: int = 0
@@ -280,6 +282,9 @@ def _add_attempt(task: "AgenticTask", r: dict, case: str, slug: str, *,
     task.checks_failed.update(k for k, v in checks.items() if not v)
     task.timed_out += bool(r.get("timed_out"))
     task.cost_known += r.get("cost_estimate_usd") is not None
+    if r.get("cost_estimate_usd") is None and r.get("cost_from_prices_usd") is not None:
+        task.cost_priced += 1
+        task.cost_priced_usd += float(r["cost_from_prices_usd"])
     task.input_tokens += sum(int(r.get(k) or 0) for k in
                              ("input_tokens", "cache_read_tokens", "cache_write_tokens"))
     if r.get("output_tokens_known", True):
@@ -802,9 +807,11 @@ def render_track(track: str, rows: list[AgenticRow], cases: list[str]) -> str:
         for i, (row, t) in enumerate(ranked, 1):
             failed = ", ".join(k if n == t.attempts else f"{k} ({n}/{t.attempts})"
                                for k, n in t.checks_failed.most_common()) or "none"
-            cost = (f"${t.cost_usd / t.cost_known:.2f}" if t.cost_known else "n/a")
-            if t.cost_known and t.cost_known < t.attempts:
-                cost += f" ({t.cost_known}/{t.attempts} reported)"
+            costed = t.cost_known + t.cost_priced
+            cost = ("n/a" if not costed else
+                    ("≈ " if t.cost_priced else "") + f"${(t.cost_usd + t.cost_priced_usd) / costed:.2f}")
+            if costed and costed < t.attempts:
+                cost += f" ({costed}/{t.attempts} known)"
             cells = [str(i), row.name, row.level, f"{t.passes}/{t.attempts}",
                      f"{t.checks_share * 100:.0f}% ({t.checks_passed}/{t.checks_total})",
                      failed, *[t.tests_cell(k) for k in kinds],
@@ -821,7 +828,10 @@ def render_track(track: str, rows: list[AgenticRow], cases: list[str]) -> str:
               "E2E), summed over attempts; a pass needs all of them. Hidden test columns as "
               "on the main board (\"not run\": the build stopped before that suite). Cost: "
               "Claude Code reports cost only when its session ends, so a Claude attempt "
-              "stopped at the limit has none (n/a); opencode reports it per step. Tokens are "
+              "stopped at the limit is priced from its session record instead (≈: every "
+              "request at Anthropic API list prices, pricing.py; these reproduce Claude "
+              "Code's own figure for finished sessions; attempts without a record: n/a); "
+              "opencode reports it per step. Tokens are "
               "means per attempt: input counts fresh input plus cache reads and cache writes "
               "(an agent re-reads its context every turn, so it is mostly cache reads); "
               "output includes thinking. For a Claude attempt stopped at the limit, input "

@@ -35,6 +35,7 @@
   "cache_write_tokens": 80677,
   "cost_estimate_usd": null,
   "cost_reported_usd": null,
+  "cost_from_prices_usd": 0.064999,
   "reasoning_tokens": 0,
   "model_time_source": null,
   "agent_error": null,

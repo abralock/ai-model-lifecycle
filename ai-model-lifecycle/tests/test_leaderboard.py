@@ -753,3 +753,16 @@ def test_the_track_board_shows_token_spend(runs, monkeypatch):
     assert "| Input tokens | Output tokens |" in md
     assert "| 7.4M | n/a |" in next(line for line in md.splitlines() if "| haiku |" in line)
     assert "| 2.0M | 34k |" in next(line for line in md.splitlines() if "| glm · opencode |" in line)
+
+
+def test_a_track_boards_note_names_the_checks_of_the_tasks_it_shows(runs, monkeypatch):
+    """An r2 track board must describe r2's 5 checks, not r1b's 8."""
+    checks = {k: True for k in ("edits_applied", "has_app", "build", "parity", "integration")}
+    _agentic("p", "20261106T120000Z", "sonnet", "r2_gwt_to_angular", track="r2-10min",
+             checks=checks, minutes=5)
+    monkeypatch.setattr(leaderboard, "ScoreCache", lambda: fake_scorer)
+    leaderboard.main(["--track", "r2-10min"])
+    note = next(line for line in leaderboard.track_file("r2-10min").read_text().splitlines()
+                if line.startswith("Checks passed"))
+    assert "r2_gwt_to_angular, 5: edits applied, Angular app present" in note
+    assert "Spring Boot 3" not in note and "r1b" not in note

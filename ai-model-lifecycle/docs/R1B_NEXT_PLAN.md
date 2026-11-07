@@ -93,6 +93,49 @@ job:
    published v8.0.0. High similarity confirms memorization and justifies B.
    Cost: cents to a few dollars.
 
+## Test visibility: one rule for the new task
+
+Today the two real projects handle tests differently, and it confuses readers:
+
+* **r1b** upgrades an existing app, so the agent has the app's own tests. Since
+  2 November it gets *our* migrated unit and integration tests too, because
+  the prompt says they are "already migrated" (commit 9893ef9), and the
+  Cypress suite ships with the project. The agent can run all of them; the
+  scorer still grades with its own copies.
+* **r2** builds a new app, which has no tests, so ours are never shown. The
+  agent gets the original app and its Cucumber scenarios to compare with.
+
+Within each task every model gets the same setup, so the rankings are fair.
+But "hidden tests" is not true for r1b, and the difference has to be explained
+every time.
+
+**The rule for the new task (A or B), in one sentence:** the agent gets what
+a developer doing the migration would have, which is the project's own tests
+and the spec; our grading tests are never shown, and the scorer always grades
+with its own copy, so the agent can't change them.
+
+For A ("r1c") and B ("r6") that means:
+
+| | In the agent's workspace | Kept from the agent; the scorer swaps it in |
+|---|---|---|
+| Unit and integration tests | The project's own tests, **in their Boot 2 form**: migrating them is part of the job | Our migrated copy (r1c: the r1b suite renamed; r6: written with the app) |
+| API contract tests (C) | — | All of them |
+| Browser tests | The project's Cypress suite, if it has one, as on r1b: it ships with the project and needs no migration | The scorer runs its own copy |
+| Spec | The prompt, the original app (it can run it to compare) | — |
+
+* **The prompt must say exactly this.** No promise of already-migrated tests:
+  the mismatch between prompt and workspace is what forced the 2 November
+  change on r1b.
+* **Times include migrating the tests,** as on r1b before 2 November. They
+  are not comparable with r1b's re-run rows, but the new task gets its own
+  table anyway.
+* **Current r1b and r2 stay as they are.** Changing their setup now would make
+  the existing runs incomparable with each other.
+* **Wording, in the deck, the brief and the boards:** "grading tests: our copy,
+  which the agent can't change". Whether the agent can *see* a test is a
+  detail of each task, not the headline. Under this rule they are also hidden
+  on the new task, so "hidden" becomes accurate again.
+
 ## Recommendation
 
 | Phase | What | Effort | Model-run cost |
@@ -117,7 +160,8 @@ suite (`models.yaml`) so it shows as its own table.
 | What | Where |
 |---|---|
 | Disguised project (a pinned private fork, or a rename script applied to the r1b sources) | `cases/r1c_*/`, `cases/sources.py` |
-| Prompt and goal (Boot 3.3 / Java 21) | `cases/r1c_*/prompt.md`, `agentic.py` `CASES` |
+| Prompt and goal (Boot 3.3 / Java 21), saying which tests are provided (see "Test visibility") | `cases/r1c_*/prompt.md`, `agentic.py` `CASES` |
+| Workspace setup: the project's own Boot 2 tests only, never our copies | `agentic.py` (`_setup_r1c`) |
 | Hidden tests renamed, plus API contract tests | `scorers/fixtures/r1c_hidden_tests/` |
 | Scorer (fork of `r1b_scorer.py`: Java 21, deprecation check, contract tests) | `scorers/r1c_scorer.py`, `scorers/dispatch.py` |
 | Cypress suite renamed, and its cache | `cases/r1c_*/setup_e2e.sh` |

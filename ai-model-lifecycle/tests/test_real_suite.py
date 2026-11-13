@@ -40,7 +40,7 @@ def test_real_suite_config():
     sanity = load_config()
     assert sanity.suite == "sanity" and sanity.report_name == "REPORT.md"
     assert sanity.max_tokens == 32000 and "r1b_jhipster_boot3" not in sanity.cases
-    assert sanity.suites == ["sanity", "real"]
+    assert sanity.suites == ["sanity", "real", "real-screen"]
 
 
 def test_unknown_suite_is_an_error():
@@ -466,7 +466,7 @@ def test_real_case_sources_are_pinned_forks_and_not_committed():
     from cases import sources
 
     lock = sources._lock()
-    assert set(lock) == set(REAL.cases)
+    assert set(lock) == set(REAL.cases) | set(load_config(suite="real-screen").cases)
     for case_id, srcs in lock.items():
         for s in srcs:
             assert s["repo"].startswith("https://github.com/abralock/")

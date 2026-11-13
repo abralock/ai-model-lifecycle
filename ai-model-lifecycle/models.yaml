@@ -255,6 +255,13 @@ suites:
     cases:
       - r1b_jhipster_boot3
       - r2_gwt_to_angular
+  # New real projects being screened (docs/REAL_R6_R7_PLAN.md): agentic only
+  # (agentic.py --case ... --track real-screen), never on the main board.
+  # They join `real` only after the owner has reviewed the screening.
+  real-screen:
+    agentic_time_budgets_s: [900, 1800, 3600]
+    cases:
+      - r7_shogun_hibernate6
 
 # --- Leaderboard policy (leaderboard.py; `--all-results` ignores it) ----------
 # Which results the team's leaderboard ranks. Only runs from the thinking-time

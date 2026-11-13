@@ -124,7 +124,9 @@ class Board:
 
 # Hidden test suites a scorer reports per kind (scorers.base.record_tests), in
 # column order, with their column titles.
-TEST_KINDS = {"unit": "Unit tests", "integration": "Integration tests", "e2e": "E2E tests"}
+TEST_KINDS = {"unit": "Unit tests", "integration": "Integration tests", "e2e": "E2E tests",
+              # r7: the agent's own migrated suite, then our grading copy of it
+              "own": "Own tests (migrated)", "grading": "Grading tests"}
 
 
 @dataclass

@@ -1,0 +1,7 @@
+{
+  "tests": 792,
+  "source": "runs/opus-5.5-cc-vs-glm-5.3/agentic/20261113T143615Z (Opus 5.5 high, track r7-reference), shogun-core-main/src/test",
+  "removed": ["hibernate/ShogunPostgresqlDialectTest.java", "util/dialect/ShogunCoreOracleDialectTest.java"],
+  "changed": ["dao/QueryRestrictionDaoTest.java: findByCriteria_ignoresRestrictionsReturningNull -> findByCriteria_treatsANullArrayAsNoRestriction"],
+  "validated": "2026-11-13: python -m scorers.r7_scorer --baseline passes 9/9 (own 797, grading 792)"
+}

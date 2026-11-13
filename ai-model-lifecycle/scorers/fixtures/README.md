@@ -45,3 +45,25 @@ features, with the original Selenium page objects' selectors. Validated on
 contract's `/api/manufacturers`). The unmodified answers of Haiku 4.5 and 5.5
 fail on genuine mistakes: wrong REST paths, and a missing debug id
 (`create-manufacturer`).
+
+`r7_hidden_tests/` — shogun-core-main's own test suite (56 JUnit 4 classes,
+776 tests on H2) migrated to JUnit 5 and Hibernate 6, plus `QueryRestrictionDaoTest`
+(16 tests of the prompt's replacement for Hibernate's legacy Criteria). It is
+the reference migration's `src/test`: Opus 5.5 at high thinking, in the sandbox
+with a 3-hour limit (it finished in 54.9 min), track `r7-reference`, run
+20261113T143615Z; the record under `runs/opus-5.5-cc-vs-glm-5.3/agentic/` rebuilds
+the whole project (`python -m scorers.r7_scorer --tree-from-record <record> <dir>`).
+Two of its added tests were left out because they test how it rewrote the SQL
+dialects, which the prompt does not specify (`ShogunPostgresqlDialectTest`,
+`ShogunCoreOracleDialectTest`), and one test was narrowed to the behaviour the
+prompt states (a `null` restriction array means no restriction). The test
+resources (Spring contexts, H2 settings) are the project's own, unchanged.
+`SUITE.json` records the count the scorer requires (792).
+
+Checks that keep it fair (`tests/test_r7_scorer.py`): every shogun-core class
+it imports exists in the original project or is one of the prompt's two new
+types; and every public or protected method of the original keeps its
+signature in the reference except the protected `createDistinctRootEntityCriteria`,
+which the prompt lets go. Validated on 2026-11-13: the reference passes all 9
+checks (`python -m scorers.r7_scorer --baseline`: own tests 797, grading 792).
+

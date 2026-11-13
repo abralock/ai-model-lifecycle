@@ -1,7 +1,13 @@
 {
   "tests": 792,
   "source": "runs/opus-5.5-cc-vs-glm-5.3/agentic/20261113T143615Z (Opus 5.5 high, track r7-reference), shogun-core-main/src/test",
-  "removed": ["hibernate/ShogunPostgresqlDialectTest.java", "util/dialect/ShogunCoreOracleDialectTest.java"],
-  "changed": ["dao/QueryRestrictionDaoTest.java: findByCriteria_ignoresRestrictionsReturningNull -> findByCriteria_treatsANullArrayAsNoRestriction"],
-  "validated": "2026-11-13: python -m scorers.r7_scorer --baseline passes 9/9 (own 797, grading 792)"
+  "removed": [
+    "hibernate/ShogunPostgresqlDialectTest.java",
+    "util/dialect/ShogunCoreOracleDialectTest.java"
+  ],
+  "changed": [
+    "dao/QueryRestrictionDaoTest.java: findByCriteria_ignoresRestrictionsReturningNull -> findByCriteria_treatsANullArrayAsNoRestriction",
+    "web/ApplicationControllerTest.java: MockMvc uses the project's ShogunCoreJsonObjectMapper (as a SHOGun webapp does), not Spring's default converter, which dropped Joda-Time support in Spring 6 (2026-11-14, found on Haiku 5.5's screening attempt)"
+  ],
+  "validated": "2026-11-14: python -m scorers.r7_scorer --baseline passes 9/9 (own 797, grading 792), after the ApplicationControllerTest change"
 }

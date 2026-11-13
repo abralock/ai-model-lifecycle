@@ -56,7 +56,12 @@ the whole project (`python -m scorers.r7_scorer --tree-from-record <record> <dir
 Two of its added tests were left out because they test how it rewrote the SQL
 dialects, which the prompt does not specify (`ShogunPostgresqlDialectTest`,
 `ShogunCoreOracleDialectTest`), and one test was narrowed to the behaviour the
-prompt states (a `null` restriction array means no restriction). The test
+prompt states (a `null` restriction array means no restriction). On
+2026-11-14 `ApplicationControllerTest` was changed to write JSON with the
+project's `ShogunCoreJsonObjectMapper`, as a SHOGun webapp does, instead of
+Spring's default converter: Spring 6's default no longer registers Joda-Time,
+and Haiku 5.5's screening attempt (correctly) relied on the project's mapper
+where the reference had annotated the entities. The test
 resources (Spring contexts, H2 settings) are the project's own, unchanged.
 `SUITE.json` records the count the scorer requires (792).
 

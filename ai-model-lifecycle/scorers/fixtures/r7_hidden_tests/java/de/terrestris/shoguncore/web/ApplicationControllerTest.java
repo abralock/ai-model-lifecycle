@@ -17,12 +17,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import de.terrestris.shoguncore.dao.ApplicationDao;
 import de.terrestris.shoguncore.model.Application;
 import de.terrestris.shoguncore.service.ApplicationService;
+import de.terrestris.shoguncore.util.json.ShogunCoreJsonObjectMapper;
 
 /**
  * @author Nils Bühner
@@ -51,8 +53,13 @@ public class ApplicationControllerTest {
         applicationController = new ApplicationController<Application, ApplicationDao<Application>, ApplicationService<Application, ApplicationDao<Application>>>();
         applicationController.setService(applicationServiceMock);
 
-        // Setup Spring test in standalone mode
+        // Setup Spring test in standalone mode, with JSON written the way a
+        // SHOGun webapp writes it (its servlet context configures the Jackson
+        // converter with ShogunCoreJsonObjectMapper). Spring 6's default
+        // converter no longer registers Joda-Time on its own, so a migration
+        // may rely on the project's mapper instead of annotating the entities.
         this.mockMvc = MockMvcBuilders.standaloneSetup(applicationController)
+            .setMessageConverters(new MappingJackson2HttpMessageConverter(new ShogunCoreJsonObjectMapper()))
             .build();
     }
 

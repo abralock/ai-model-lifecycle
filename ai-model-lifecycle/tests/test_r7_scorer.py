@@ -252,11 +252,24 @@ def test_r7_hidden_tests_are_junit5_with_the_original_resources(tmp_path):
     hidden = r7_scorer.HIDDEN_TESTS
     hits = [h for h in r7_scorer.junit4_hits(_layout(hidden, tmp_path)) if "pom.xml" not in h]
     assert hits == []
-    # the test resources (Spring contexts, H2 settings) are the project's own, unchanged
+    # the test resources (Spring contexts, H2 settings) are the project's own,
+    # unchanged except for one added setting: quote identifiers that are keywords
+    # (USER, VALUE in H2 2.x), so an H2 upgrade works whether the agent put that
+    # setting in its pom (the reference) or in its own test resources
     original = r7_scorer.PROJECT / MODULE / "src" / "test" / "resources"
+    added = {"META-INF/hibernate.properties", "META-INF/spring/test-context-dao.xml"}
     for f in original.rglob("*"):
-        if f.is_file():
-            assert (hidden / "resources" / f.relative_to(original)).read_bytes() == f.read_bytes(), f
+        if not f.is_file():
+            continue
+        rel = f.relative_to(original).as_posix()
+        ours = hidden / "resources" / rel
+        if rel in added:
+            mine, theirs = ours.read_text().splitlines(), f.read_text().splitlines()
+            extra = [ln for ln in mine if ln not in theirs]
+            assert extra and all("auto_quote_keyword" in ln or ln.startswith("#") for ln in extra), (rel, extra)
+            assert set(theirs) <= set(mine), rel
+        else:
+            assert ours.read_bytes() == f.read_bytes(), rel
     assert int(__import__("json").loads((hidden / "SUITE.json").read_text())["tests"]) >= 776
 
 

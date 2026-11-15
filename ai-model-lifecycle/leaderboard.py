@@ -133,6 +133,10 @@ TEST_KINDS = {"unit": "Unit tests", "integration": "Integration tests", "e2e": "
 class AgenticTask:
     """One model's agentic attempts on one task (docs/METRICS_PLAN.md §8)."""
     outcomes: list[tuple[float, bool]] = field(default_factory=list)  # (wall s, passed)
+    # wall s for Pass@T only: an attempt stopped at the time limit counts as
+    # taking exactly the limit (see _budget_s); mean time and ranking keep the
+    # recorded wall time
+    budget_s: list[float] = field(default_factory=list)
     cost_usd: float = 0.0
     turns: float = 0.0
     tool_s: float = 0.0             # tool time over the attempts measuring both
@@ -208,7 +212,10 @@ class AgenticTask:
 
     def pass_at(self, budget_s: float) -> float:
         """Share of attempts that passed within the budget (inclusive)."""
-        return sum(1 for t, ok in self.outcomes if ok and t <= budget_s) / self.attempts
+        times = (self.budget_s if len(self.budget_s) == len(self.outcomes)
+                 else [t for t, _ in self.outcomes])
+        return sum(1 for t, (_, ok) in zip(times, self.outcomes)
+                   if ok and t <= budget_s) / self.attempts
 
     @property
     def tool_model_ratio(self) -> float | None:
@@ -266,6 +273,18 @@ def excluded_attempts() -> dict[str, str]:
     return {str(k): str(v) for k, v in (data.get("agentic") or {}).items()}
 
 
+def _budget_s(r: dict) -> float:
+    """An attempt's wall time for Pass@T. One stopped at the time limit counts
+    as taking exactly the limit: the scorer grades what it had delivered when
+    stopped, and the fraction of a second the harness takes to stop it
+    (3600.3 s on a 3600 s limit) must not push a pass outside Pass@limit."""
+    t = float(r.get("latency_s") or 0)
+    limit = r.get("time_limit_s")
+    if r.get("timed_out") and isinstance(limit, (int, float)) and limit > 0:
+        t = min(t, float(limit))
+    return t
+
+
 def _add_attempt(task: "AgenticTask", r: dict, case: str, slug: str, *,
                  score: bool, scorer=None) -> None:
     """Fold one scored attempt into a task's metrics."""
@@ -293,6 +312,7 @@ def _add_attempt(task: "AgenticTask", r: dict, case: str, slug: str, *,
         task.output_tokens += int(r.get("output_tokens") or 0)
         task.output_known += 1
     task.outcomes.append((float(r.get("latency_s") or 0), ok))
+    task.budget_s.append(_budget_s(r))
     task.runs.add(r["_run"])
     task.cost_usd += float(r.get("cost_estimate_usd") or 0)
     task.turns += float(r.get("num_turns") or 0)

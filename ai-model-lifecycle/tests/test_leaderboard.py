@@ -553,6 +553,20 @@ def test_agentic_ttfs_pass_at_t_and_tool_model_ratio(runs):
     assert row.endswith("| 20261101T000000Z |")                      # only this task's run
 
 
+def test_an_attempt_stopped_at_the_limit_counts_as_taking_the_limit(runs):
+    """The harness takes a moment to stop an attempt: 3600.3 s on a 3600 s
+    limit. What it delivered by then is what is scored, so a pass still counts
+    at Pass@3600s; an attempt that ended by itself keeps its own time."""
+    r1b = REAL.cases[0]
+    _agentic("p", "20261101T000000Z", "glm", r1b, 0, passed=True, minutes=3600.3 / 60,
+             timed_out=True, time_limit_s=3600)
+    _agentic("p", "20261101T000000Z", "glm", r1b, 1, passed=True, minutes=3600.3 / 60)
+    t = leaderboard.build(score=True, scorer=fake_scorer).agentic[0].by_case[r1b]
+    assert sorted(t.budget_s) == [3600.0, pytest.approx(3600.3)]
+    assert t.pass_at(3600) == 0.5                     # only the stopped one is clamped
+    assert all(s == pytest.approx(3600.3) for s, _ in t.outcomes)   # mean time, ranking: as recorded
+
+
 def test_agentic_metrics_are_na_without_a_pass_or_a_measurement(runs):
     _agentic("p", "20261101T000000Z", "haiku", SANITY.cases[0], passed=False, minutes=2)
     md = leaderboard.render(leaderboard.build(score=True, scorer=fake_scorer))

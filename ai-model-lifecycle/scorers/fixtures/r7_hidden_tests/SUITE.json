@@ -1,0 +1,15 @@
+{
+  "tests": 792,
+  "source": "runs/opus-5.5-cc-vs-glm-5.3/agentic/20261113T143615Z (Opus 5.5 high, track r7-reference), shogun-core-main/src/test",
+  "removed": [
+    "hibernate/ShogunPostgresqlDialectTest.java",
+    "util/dialect/ShogunCoreOracleDialectTest.java"
+  ],
+  "changed": [
+    "dao/QueryRestrictionDaoTest.java: findByCriteria_ignoresRestrictionsReturningNull -> findByCriteria_treatsANullArrayAsNoRestriction",
+    "web/ApplicationControllerTest.java: MockMvc uses the project's ShogunCoreJsonObjectMapper (as a SHOGun webapp does), not Spring's default converter, which dropped Joda-Time support in Spring 6 (2026-11-14, found on Haiku 5.5's screening attempt)",
+    "resources/META-INF/hibernate.properties, spring/test-context-dao.xml: added hibernate.auto_quote_keyword=true (USER and VALUE are reserved in H2 2.x); the reference set it in its pom, GLM-5.3 in its test resources, which grading replaces (2026-11-14, found on GLM-5.3's screening attempt)",
+    "dao/QueryRestrictionDaoTest.java: findAllUserPermissionsOfUser_findsPermissionsOfAllEntityTypes no longer gives a user group a permission on itself (the original, Hibernate 5 on Java 8, throws 'collection was evicted' for that case; it passes the narrowed case: user 2, group 1) (2026-11-14)"
+  ],
+  "validated": "2026-11-14: python -m scorers.r7_scorer --baseline passes 9/9 (own 797, grading 792), after all three changes; on the final suite Haiku 5.5 medium and high and GLM-5.3 each fail 1 grading test, each a regression checked against the original"
+}

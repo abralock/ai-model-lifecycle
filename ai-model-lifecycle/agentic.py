@@ -238,6 +238,44 @@ def _setup_r5(ws: Path) -> None:
     _copy(r4 / "seed.py", ws / "source" / "seed.py")
 
 
+R7_CASE = "r7_shogun_hibernate6"
+
+
+def r7_m2_cache() -> Path:
+    """The Maven repository of the original r7 build (cases/r7_shogun_hibernate6/setup.sh).
+
+    shogun-core resolves through terrestris's own Nexus (its pom lists it before
+    Central), which the sandbox does not reach; three of its libraries are only
+    there (gt-main 22.2, deegree-core-commons 3.4.11, structured-content-tools
+    1.3.11). The original build's whole repository is seeded into the sandbox's
+    Maven volume, so those resolve locally and anything new comes from Central."""
+    from scorers.base import cache_dir
+    return cache_dir() / R7_CASE / "m2"
+
+
+def _seed_r7_m2(m2: Path) -> None:
+    # copy, never overwrite (-n): the volume is shared with other cases' runs;
+    # as the agent user, so the sandbox can still write its own artifacts there
+    r = subprocess.run(["docker", "run", "--rm", "--user", "agent", "--entrypoint", "sh",
+                        "-v", f"{M2_VOLUME}:/home/agent/.m2", "-v", f"{m2}:/seed:ro", IMAGE,
+                        "-c", "mkdir -p /home/agent/.m2/repository && "
+                              "cp -Rn /seed/. /home/agent/.m2/repository/"],
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError(f"r7: seeding the sandbox Maven volume failed: {r.stderr.strip()[:300]}")
+
+
+def _setup_r7(ws: Path) -> None:
+    m2 = r7_m2_cache()
+    if not (m2 / "org" / "geotools" / "gt-main" / "22.2").is_dir():
+        raise RuntimeError("r7 needs its Maven cache: run cases/r7_shogun_hibernate6/setup.sh")
+    # the whole project at the pinned commit, its own JUnit 4 tests included:
+    # migrating them is part of the task (the grading tests stay with the scorer)
+    for entry in (case_dir(R7_CASE) / "project").iterdir():
+        _copy(entry, ws / entry.name)
+    _seed_r7_m2(m2)
+
+
 _PG_NOTE = ("A PostgreSQL 17 server is running in this sandbox: `psql` connects to "
             "database aidb as user ai (PGHOST/PGUSER/PGPASSWORD/PGDATABASE are set).")
 
@@ -332,6 +370,30 @@ CASES: dict[str, AgenticCase] = {
         task_note=("Write the deliverable as etl.sql. Sample source data: source/schema.sql "
                    "creates the tables and `python3 source/seed.py --help` shows how to "
                    "generate rows. " + _PG_NOTE),
+    ),
+    "r7_shogun_hibernate6": AgenticCase(
+        goal=("In shogun-core-main and the parent pom.xml: Hibernate ORM 6.x with "
+              "jakarta.persistence, Spring Framework 6.x and Spring Security 6.x, Java 17; "
+              "no javax.persistence, javax.servlet, javax.transaction, javax.annotation.Resource "
+              "or javax.mail imports remain; the project's tests use JUnit 5 only (no JUnit 4, "
+              "no PowerMock); the legacy Criteria API is replaced by the prompt's QueryRestriction "
+              "and SortOrder types with every other public signature unchanged; and "
+              "`mvn -B -pl shogun-core-main -am verify` passes with at least 776 tests run "
+              "and none failed, skipped or disabled."),
+        deliverables=["pom.xml", "shogun-core-main/pom.xml", "shogun-core-main/src/**"],
+        exclude=["**/target/**"],
+        setup=_setup_r7,
+        task_note=("The whole project is checked out here: the parent pom.xml, "
+                   "shogun-core-main (the module to upgrade) and shogun-core-webapp-archetype "
+                   "(out of scope: leave it unchanged). Java 17 and Maven are installed "
+                   "(`mvn`; the project has no wrapper), and the original build's "
+                   "dependencies are already in the local Maven repository, including "
+                   "three that are not on Maven Central (gt-main, deegree-core-commons, "
+                   "structured-content-tools); terrestris's own Maven repository is not "
+                   "reachable from here, Maven Central is. Java 8 is at /opt/java8 if you "
+                   "want to run the original build. Off-limits: shogun-core in any version "
+                   "other than the one here (including its migrate-spring branch) and "
+                   "terrestris/shogun, its successor."),
     ),
 }
 
@@ -1297,8 +1359,10 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
     model = pair.current if role == "current" else pair.target
     backend = backend or backend_for(cfg, model)
     # a comma-separated list, a suite name from models.yaml, or every case
+    screening_suite = load_config(suite="real-screen").cases
     if case in (None, "all"):
-        cases = list(CASES)
+        # every case except those still being screened (they need --track)
+        cases = [c for c in CASES if c not in screening_suite]
     elif case in cfg.suites:
         cases = list(load_config(suite=None if case == "sanity" else case).cases)
     else:
@@ -1306,6 +1370,12 @@ def run(cfg, pair_id: str, *, role: str = "current", case: str | None = None,
     unknown = [c for c in cases if c not in CASES]
     if unknown:
         raise ValueError(f"no agentic setup for case(s): {', '.join(unknown)}")
+    # cases still being screened (models.yaml `real-screen`) never reach the
+    # main board: they run only on a separate track
+    screening = [c for c in cases if c in screening_suite]
+    if screening and track is None:
+        raise ValueError(f"{', '.join(screening)} is still being screened: run it with --track "
+                         "(e.g. --track real-screen), never on the main board")
     if track is not None and not TRACK_RE.match(track):
         raise ValueError(f"--track must be lowercase letters, digits and dashes; got {track!r}")
     effort = effort or cfg.effort

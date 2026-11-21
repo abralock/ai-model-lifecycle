@@ -1,0 +1,70 @@
+package de.terrestris.shoguncore.web;
+
+import de.terrestris.shoguncore.model.ImageFile;
+import de.terrestris.shoguncore.service.ImageFileService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.MockitoAnnotations;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * Test class for {@link ImageFileController}
+ *
+ * @author Andre Henn
+ */
+public class ImageFileControllerTest {
+
+    private final String GET_THUMBNAIL_ENDPOINT = "/image/getThumbnail.action";
+
+    private MockMvc mockMvc;
+
+    @Mock(name="imageFileService")
+    private ImageFileService imageFileService;
+
+    @BeforeEach
+    public void setUp() throws Exception {
+        // Process mock annotations
+        MockitoAnnotations.openMocks(this);
+
+        ImageFileController imageFileController = new ImageFileController();
+        imageFileController.setService(imageFileService);
+
+        // Setup Spring test in standalone mode
+        this.mockMvc = MockMvcBuilders.standaloneSetup(imageFileController).build();
+    }
+
+    @Test
+    public void getThumbnailReturnsErrorMapIfIdIsNull() throws Exception {
+        Mockito.when(imageFileService.findById(ArgumentMatchers.any(int.class))).thenReturn(null);
+
+        MvcResult result = mockMvc.perform(MockMvcRequestBuilders.get(GET_THUMBNAIL_ENDPOINT)
+            .param("id", ""))
+            .andExpect(status().is4xxClientError()).andReturn();
+
+        assertEquals(result.getResponse().getStatus(), 400);
+    }
+
+    @Test
+    public void getThumbnailReturnsImage() throws Exception {
+        ImageFile imgFile = new ImageFile();
+        imgFile.setThumbnail(new byte[] {0, 8, 15});
+        imgFile.setFileType("image/png");
+        imgFile.setFileName("testImg");
+        Mockito.when(imageFileService.findById(ArgumentMatchers.any(int.class))).thenReturn(imgFile);
+
+        MvcResult result = mockMvc.perform(MockMvcRequestBuilders.get(GET_THUMBNAIL_ENDPOINT)
+            .param("id", "121"))
+            .andExpect(status().isOk()).andReturn();
+
+        assertEquals(result.getResponse().getStatus(), 200);
+    }
+}

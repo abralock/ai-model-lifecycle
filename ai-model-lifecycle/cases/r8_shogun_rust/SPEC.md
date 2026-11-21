@@ -26,6 +26,7 @@ record. Where it differs from what was built, the built version wins:
   group references on account updates).
 * **Snapshots** at 1, 2 and 4 h of the 8-hour cap (`agentic.py`).
 * **Runs so far** (one attempt each, v2): Opus 5.5 high pass 490/490 (154 min);
+  Sonnet 5.5 high fail 483/490 (63 min, no permission failures);
   Haiku 5.5 medium fail 477/490 (63 min); Haiku 5.5 high fail 468/490 (58 min);
   GLM-5.3 high (opencode) fail 463/490 (163 min, $31.57 Go credit).
 

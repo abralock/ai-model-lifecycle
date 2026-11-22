@@ -33,6 +33,13 @@ record. Where it differs from what was built, the built version wins:
   $31.57 Go credit). Qwen's first attempt (20261121T113838Z) hit Go's 5-hour
   usage limit after 160 min: an infrastructure stop, not scored, rerun from
   scratch.
+* **Repeat attempts** (to measure how much one attempt varies; the ranking
+  keeps the first attempts): Haiku 5.5 high and medium, two more attempts
+  each (`20261122T035114Z` high, `20261122T061916Z` medium). High: 476 and
+  478 (mean of three 474.0, range 468–478); medium: 479 (7/9, the best Haiku
+  result) and 470 (mean 475.3, range 470–479). No pass in six; 4 of 6 let a
+  write through that the original blocks. High thinking is not better than
+  medium on this task, and costs about 2.3× more.
 
 ## 1. Purpose
 

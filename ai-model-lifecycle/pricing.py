@@ -102,6 +102,7 @@ PRICES: dict[str, Price] = {
     # Qwen3.x on Go is Anthropic-messages only (family: messages via a
     # model-level override, keeping the opencode-go provider string).
     "qwen3.8-flash": Price(input=0.15, output=0.47, cache_read=0.016, cache_write=0.20),
+    "qwen3.8-max": Price(input=2.00, output=6.00, cache_read=0.25, cache_write=2.50),
 }
 
 # Fallback used when a model slug is not in the table. Keeps the report from

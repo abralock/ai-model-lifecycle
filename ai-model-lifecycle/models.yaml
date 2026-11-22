@@ -153,6 +153,14 @@ pairs:
   - id: opus-5.5-cc-vs-kimi-k3
     current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
     target:  {id: kimi-k3, name: "Kimi K3", api: opencode-go}
+  # Flagship Qwen on Go (added 2026-11-21 for r8): Qwen3.8 Max, Anthropic
+  # messages only like Qwen3.8 Flash (family: messages), 1M context, Go list
+  # $2 in / $6 out / $0.25 cache read / $2.50 cache write per 1M (models
+  # endpoint, 2026-11-21). Same 1800s timeout floor as the Flash pair.
+  - id: opus-5.5-cc-vs-qwen3.8-max
+    timeout_s: 1800
+    current: {id: claude-opus-5-5, name: "Claude Opus 5.5 (CC)", api: claude-code}
+    target:  {id: qwen3.8-max, name: "Qwen3.8 Max", api: opencode-go, family: messages}
 
 # --- Harness run defaults (shared across all pairs) -------------------------
 defaults:
